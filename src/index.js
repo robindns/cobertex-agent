@@ -3,8 +3,9 @@ require('dotenv').config();
 const express = require('express');
 const config = require('./config');
 const { processarMensagem } = require('./agent');
-const { downloadMedia, transcreverAudio, analisarImagem, gerarAudio } = require('./media');
-const { enviarTexto, enviarAudio, marcarLida, digitando } = require('./evolution');
+const { downloadMedia, transcreverAudio, analisarImagem } = require('./media');
+const { enviarTexto, marcarLida, digitando } = require('./evolution');
+const { uploadImagem } = require('./tools/memorando');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -28,7 +29,6 @@ app.post('/webhook', async (req, res) => {
 
     if (evento !== 'messages.upsert') return;
 
-    // Evolution API v2 pode enviar em data.message (singular) ou data.messages[0]
     const message =
       payload.data?.message ||
       payload.data?.messages?.[0] ||
@@ -51,7 +51,7 @@ app.post('/webhook', async (req, res) => {
     const numero = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/[^0-9]/g, '');
 
     if (!numero) {
-      console.log('[webhook] Número não encontrado no payload');
+      console.log('[webhook] Número não encontrado');
       return;
     }
 
@@ -59,7 +59,7 @@ app.post('/webhook', async (req, res) => {
 
     const usuario = config.USUARIOS[numero];
     if (!usuario) {
-      console.log(`[webhook] Número não autorizado: ${numero}`);
+      console.log(`[webhook] Não autorizado: ${numero}`);
       await enviarTexto(numero, '⚠️ Número não autorizado. Fale com Robinson.');
       return;
     }
@@ -76,7 +76,7 @@ app.post('/webhook', async (req, res) => {
 
     let textoFinal = '';
     let descricaoImagem = null;
-    let imagemBase64 = null;
+    let imagemUrl = null;
 
     if (messageType === 'conversation' || messageType === 'extendedTextMessage') {
       textoFinal =
@@ -102,8 +102,12 @@ app.post('/webhook', async (req, res) => {
       const base64Img = await downloadMedia(messageKey, config.EVOLUTION_INSTANCE);
       const caption = messageContent?.imageMessage?.caption || '';
       const mimeType = messageContent?.imageMessage?.mimetype || 'image/jpeg';
+
       if (base64Img) {
-        imagemBase64 = base64Img;
+        // Faz upload da imagem no Base44 para obter URL pública
+        imagemUrl = await uploadImagem(base64Img, mimeType);
+        console.log(`[webhook] Imagem URL: ${imagemUrl}`);
+
         descricaoImagem = await analisarImagem(base64Img, mimeType, caption || undefined);
         textoFinal = caption || '(imagem enviada sem legenda)';
       } else {
@@ -128,26 +132,11 @@ app.post('/webhook', async (req, res) => {
       numero,
       usuario,
       texto: textoFinal,
-      imagemBase64,
-      imagemMimeType: messageType === 'imageMessage' ? (messageContent?.imageMessage?.mimetype || 'image/jpeg') : null,
+      imagemUrl,
       descricaoImagem,
     });
 
-    const deveResponderEmAudio =
-      (messageType === 'audioMessage' || messageType === 'pttMessage') &&
-      resposta.length < 500 &&
-      config.ELEVENLABS_API_KEY;
-
-    if (deveResponderEmAudio) {
-      const audioBuffer = await gerarAudio(resposta);
-      if (audioBuffer) {
-        await enviarAudio(numero, audioBuffer);
-      } else {
-        await enviarTexto(numero, resposta);
-      }
-    } else {
-      await enviarTexto(numero, resposta);
-    }
+    await enviarTexto(numero, resposta);
 
     if (notificarRobinson && numero !== config.ROBINSON_NUMBER) {
       const msgRobinson =
