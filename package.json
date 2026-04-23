@@ -1,0 +1,22 @@
+{
+  "name": "cobertex-agent",
+  "version": "1.0.0",
+  "description": "Agente WhatsApp IA para operações da Cobertex",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "nodemon src/index.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.39.0",
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "form-data": "^4.0.0",
+    "node-fetch": "^2.7.0",
+    "openai": "^4.52.0"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.4"
+  }
+}
