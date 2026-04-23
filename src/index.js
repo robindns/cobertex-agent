@@ -9,8 +9,6 @@ const { enviarTexto, enviarAudio, marcarLida, digitando } = require('./evolution
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 
-// ─── Health check ─────────────────────────────────────────────────────────────
-
 app.get('/', (req, res) => {
   res.json({
     status: 'online',
@@ -20,130 +18,121 @@ app.get('/', (req, res) => {
   });
 });
 
-// ─── Webhook da Evolution API ─────────────────────────────────────────────────
-
 app.post('/webhook', async (req, res) => {
-  // Responde imediatamente para evitar timeout da Evolution
   res.sendStatus(200);
 
   try {
     const payload = req.body;
-console.log('[webhook] Evento:', payload.event, JSON.stringify(Object.keys(payload)));
-
-    // Ignora eventos que não são mensagens recebidas
     const evento = (payload.event || '').toLowerCase();
-if (evento !== 'messages.upsert') return;
+    console.log('[webhook] Evento:', evento, '| Sender:', payload.sender);
 
-    const message = payload.data?.messages?.[0];
-    if (!message) return;
+    if (evento !== 'messages.upsert') return;
 
-    // Ignora mensagens enviadas por nós mesmos
-    if (message.key?.fromMe) return;
+    // Evolution API v2 pode enviar em data.message (singular) ou data.messages[0]
+    const message =
+      payload.data?.message ||
+      payload.data?.messages?.[0] ||
+      payload.data;
 
-    // Extrai número do remetente
-    const jid = message.key?.remoteJid || '';
-    const numero = jid.replace('@s.whatsapp.net', '').replace('@c.us', '');
-
-    // Verifica se o número está autorizado
-    const usuario = config.USUARIOS[numero];
-    if (!usuario) {
-      console.log(`[webhook] Número não autorizado: ${numero}`);
-      await enviarTexto(
-        numero,
-        '⚠️ Desculpe, este número não está autorizado a usar o assistente Cobertex.\n' +
-        'Entre em contato com Robinson para solicitar acesso.'
-      );
+    if (!message) {
+      console.log('[webhook] Nenhuma mensagem encontrada');
       return;
     }
 
-    // Marca como lida
-    await marcarLida(numero, message.key);
+    const fromMe = message.key?.fromMe || payload.data?.key?.fromMe;
+    if (fromMe) return;
 
-    const messageType = Object.keys(message.message || {})[0];
+    const jid =
+      message.key?.remoteJid ||
+      payload.data?.key?.remoteJid ||
+      payload.sender ||
+      '';
+
+    const numero = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/[^0-9]/g, '');
+
+    if (!numero) {
+      console.log('[webhook] Número não encontrado no payload');
+      return;
+    }
+
+    console.log(`[webhook] Número: ${numero}`);
+
+    const usuario = config.USUARIOS[numero];
+    if (!usuario) {
+      console.log(`[webhook] Número não autorizado: ${numero}`);
+      await enviarTexto(numero, '⚠️ Número não autorizado. Fale com Robinson.');
+      return;
+    }
+
+    console.log(`[webhook] Usuário: ${usuario.nome}`);
+
+    const messageKey = message.key || payload.data?.key;
+    if (messageKey) await marcarLida(numero, messageKey);
+
+    const messageContent = message.message || payload.data?.message || {};
+    const messageType = Object.keys(messageContent)[0] || '';
+
+    console.log(`[webhook] Tipo: ${messageType}`);
+
     let textoFinal = '';
     let descricaoImagem = null;
     let imagemBase64 = null;
 
-    console.log(`[webhook] Mensagem de ${usuario.nome} (${numero}): tipo=${messageType}`);
-
-    // ── Processa por tipo de mensagem ──────────────────────────────────────
-
     if (messageType === 'conversation' || messageType === 'extendedTextMessage') {
-      // Mensagem de texto simples
       textoFinal =
-        message.message?.conversation ||
-        message.message?.extendedTextMessage?.text ||
+        messageContent?.conversation ||
+        messageContent?.extendedTextMessage?.text ||
         '';
 
     } else if (messageType === 'audioMessage' || messageType === 'pttMessage') {
-      // Áudio / nota de voz
       await digitando(numero, 3000);
-
-      const base64Audio = await downloadMedia(message.key, config.EVOLUTION_INSTANCE);
+      const base64Audio = await downloadMedia(messageKey, config.EVOLUTION_INSTANCE);
       if (base64Audio) {
-        const mimeType = message.message?.audioMessage?.mimetype || 'audio/ogg; codecs=opus';
+        const mimeType = messageContent?.audioMessage?.mimetype || 'audio/ogg; codecs=opus';
         textoFinal = await transcreverAudio(base64Audio, mimeType);
         console.log(`[webhook] Transcrição: ${textoFinal}`);
-
-        // Prefixo para o Claude saber que veio de áudio
         textoFinal = `[Mensagem de áudio transcrita]: ${textoFinal}`;
       } else {
-        await enviarTexto(numero, '⚠️ Não consegui processar o áudio. Tente enviar em texto.');
+        await enviarTexto(numero, '⚠️ Não consegui processar o áudio. Tente em texto.');
         return;
       }
 
     } else if (messageType === 'imageMessage') {
-      // Imagem
       await digitando(numero, 2000);
-
-      const base64Img = await downloadMedia(message.key, config.EVOLUTION_INSTANCE);
-      const caption = message.message?.imageMessage?.caption || '';
-      const mimeType = message.message?.imageMessage?.mimetype || 'image/jpeg';
-
+      const base64Img = await downloadMedia(messageKey, config.EVOLUTION_INSTANCE);
+      const caption = messageContent?.imageMessage?.caption || '';
+      const mimeType = messageContent?.imageMessage?.mimetype || 'image/jpeg';
       if (base64Img) {
         imagemBase64 = base64Img;
         descricaoImagem = await analisarImagem(base64Img, mimeType, caption || undefined);
         textoFinal = caption || '(imagem enviada sem legenda)';
       } else {
-        await enviarTexto(numero, '⚠️ Não consegui processar a imagem. Tente novamente.');
+        await enviarTexto(numero, '⚠️ Não consegui processar a imagem.');
         return;
       }
 
     } else if (messageType === 'documentMessage') {
-      await enviarTexto(
-        numero,
-        '📎 Recebi seu arquivo! No momento só processo imagens e áudios diretamente.\n' +
-        'Se precisar anexar este documento a um memorando, me informe o contexto.'
-      );
+      await enviarTexto(numero, '📎 Arquivo recebido! Diga o contexto para eu anexar ao memorando.');
       return;
 
     } else {
-      // Tipo não suportado
-      console.log(`[webhook] Tipo de mensagem não suportado: ${messageType}`);
+      console.log(`[webhook] Tipo não suportado: ${messageType}`);
       return;
     }
 
     if (!textoFinal && !descricaoImagem) return;
 
-    // ── Indicador de digitando ─────────────────────────────────────────────
     await digitando(numero, 4000);
 
-    // ── Processa com o agente ──────────────────────────────────────────────
     const { resposta, notificarRobinson } = await processarMensagem({
       numero,
       usuario,
       texto: textoFinal,
       imagemBase64,
-      imagemMimeType: messageType === 'imageMessage'
-        ? (message.message?.imageMessage?.mimetype || 'image/jpeg')
-        : null,
+      imagemMimeType: messageType === 'imageMessage' ? (messageContent?.imageMessage?.mimetype || 'image/jpeg') : null,
       descricaoImagem,
     });
 
-    // ── Envia resposta ─────────────────────────────────────────────────────
-
-    // Tenta gerar áudio se a resposta for curta o suficiente (< 500 chars)
-    // e se o usuário enviou áudio (responde em áudio)
     const deveResponderEmAudio =
       (messageType === 'audioMessage' || messageType === 'pttMessage') &&
       resposta.length < 500 &&
@@ -160,22 +149,20 @@ if (evento !== 'messages.upsert') return;
       await enviarTexto(numero, resposta);
     }
 
-    // ── Notifica Robinson se necessário ───────────────────────────────────
     if (notificarRobinson && numero !== config.ROBINSON_NUMBER) {
       const msgRobinson =
         `🔔 *Solicitação fora do escopo*\n\n` +
         `👤 Solicitante: ${notificarRobinson.solicitante}\n` +
         `📋 Descrição: ${notificarRobinson.descricao}\n\n` +
-        `_Enviado automaticamente pelo assistente Cobertex_`;
+        `_Assistente Cobertex_`;
       await enviarTexto(config.ROBINSON_NUMBER, msgRobinson);
     }
 
   } catch (err) {
-    console.error('[webhook] Erro não tratado:', err);
+    console.error('[webhook] Erro:', err.message);
+    console.error(err.stack);
   }
 });
-
-// ─── Inicia servidor ──────────────────────────────────────────────────────────
 
 app.listen(config.PORT, () => {
   console.log(`\n🏗️  Cobertex Agent rodando na porta ${config.PORT}`);
