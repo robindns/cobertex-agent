@@ -28,9 +28,11 @@ app.post('/webhook', async (req, res) => {
 
   try {
     const payload = req.body;
+console.log('[webhook] Evento:', payload.event, JSON.stringify(Object.keys(payload)));
 
     // Ignora eventos que não são mensagens recebidas
-    if (payload.event !== 'messages.upsert') return;
+    const evento = (payload.event || '').toLowerCase();
+if (evento !== 'messages.upsert') return;
 
     const message = payload.data?.messages?.[0];
     if (!message) return;
