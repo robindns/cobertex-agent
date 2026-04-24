@@ -413,7 +413,7 @@ async function processarMensagem({ numero, usuario, texto, midiaUrl, midiaInfo, 
     if (ultimoMemorando[numero]) {
       contextoExtra += `\n⚠️ Memorando recente: ID=${ultimoMemorando[numero].id}, título="${ultimoMemorando[numero].titulo}". Pergunte se quer ANEXAR ao anterior ou CRIAR novo.`;
     } else {
-      contextoExtra += `\nSe criar memorando, inclua esta URL em anexos[].`;
+      contextoExtra += `\nSe criar memorando: 1) inclua esta URL em anexos[], 2) E também mencione a URL no campo conteudo no final (ex: '📎 Imagem: URL').`;
     }
   }
   if (descricaoImagem) contextoExtra += `\n🖼️ DESCRIÇÃO DA IMAGEM: ${descricaoImagem}`;
@@ -445,7 +445,7 @@ ATENDIMENTO → LEAD → PROPOSTA → CLIENTE
 - criador_id = "${usuario.user_id}" nos memorandos
 - diretor = "${usuario.diretor || 'N/A'}" na agenda
 - BUSCA: Para qualquer nome/apelido/veículo → use buscar_memorandos IMEDIATAMENTE sem perguntar
-- MÍDIA: Se midiaUrl existe → inclua em anexos[] ao criar memorando
+- MÍDIA: Se midiaUrl existe → inclua em anexos[] E também no conteúdo do memorando no final (ex: '📎 Imagem: [URL]')
 - EXCLUIR: Confirme antes. Após confirmação → execute.
 - EDITAR: Pergunte se quer sobrescrever ou criar novo
 - PDF: Use gerar_pdf e avise que está gerando — será enviado em seguida
