@@ -353,9 +353,28 @@ async function executarFerramenta(nome, input, numero) {
     case 'criar_memorando': return memorandoTools.criarMemorando(input);
     case 'buscar_memorandos': return memorandoTools.buscarMemorandos(input);
     case 'listar_memorandos': return memorandoTools.listarMemorandos(input);
-    case 'atualizar_memorando': return memorandoTools.atualizarMemorando(input);
-    case 'excluir_memorando': return memorandoTools.excluirMemorando(input);
-    case 'adicionar_anexos_memorando': return memorandoTools.adicionarAnexos(input);
+    case 'atualizar_memorando': {
+      const mid = input.memorando_id || '';
+      if (!mid || mid.length < 20 || !/^[a-f0-9]+$/i.test(mid)) {
+        return { erro: 'ID de memorando inválido. Busque o memorando primeiro para obter o ID real.' };
+      }
+      return memorandoTools.atualizarMemorando(input);
+    }
+    case 'excluir_memorando': {
+      const mid = input.memorando_id || '';
+      if (!mid || mid.length < 20 || !/^[a-f0-9]+$/i.test(mid)) {
+        return { erro: 'ID de memorando inválido. Busque o memorando primeiro para obter o ID real.' };
+      }
+      return memorandoTools.excluirMemorando(input);
+    }
+    case 'adicionar_anexos_memorando': {
+      // Valida que o memorando_id é um ID real (hexadecimal), não um texto descritivo
+      const mid = input.memorando_id || '';
+      if (!mid || mid.length < 20 || !/^[a-f0-9]+$/i.test(mid)) {
+        return { erro: 'ID de memorando inválido. Busque o memorando primeiro para obter o ID real.' };
+      }
+      return memorandoTools.adicionarAnexos(input);
+    }
     case 'concluir_memorando': return memorandoTools.concluirMemorando(input);
     case 'listar_leads': return crmTools.listarLeads(input);
     case 'buscar_lead': return crmTools.buscarLead(input);
