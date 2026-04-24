@@ -5,8 +5,16 @@ const memorandoTools = require('./tools/memorando');
 const crmTools = require('./tools/crm');
 const agendaTools = require('./tools/agenda');
 const { getPrefs, setPrefs } = require('./scheduler');
+const { gerarAudio } = require('./media');
 
 const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
+
+// Mapa numero -> nome para lookup reverso
+const MAPA_USUARIOS = Object.entries(require('./config').USUARIOS).reduce((acc, [num, usr]) => {
+  acc[usr.nome.toLowerCase()] = num;
+  acc[usr.diretor || ''] = num;
+  return acc;
+}, {});
 
 const TOOLS = [
   // ── Memorandos ────────────────────────────────────────────────────────────
@@ -331,6 +339,24 @@ Pode incluir dados de memorandos, leads, atendimentos, etc.`,
     input_schema: { type: 'object', properties: {}, required: [] },
   },
 
+  // ── Comunicação entre usuários ───────────────────────────────────────────
+  {
+    name: 'enviar_mensagem_usuario',
+    description: `Envia uma mensagem de texto ou áudio para outro usuário autorizado do sistema.
+Use quando: "envie uma mensagem para Gustavo", "mande boas-vindas à Ana", "avise o Eduardo", "envie um áudio para Robinson".
+Usuários disponíveis: Gustavo, Robinson, Ana Carolina, Eduardo.
+Para áudio: só gere quando explicitamente solicitado ("envie um áudio", "manda um áudio").`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        destinatario: { type: 'string', description: 'Nome do destinatário (Gustavo, Robinson, Ana, Eduardo)' },
+        mensagem: { type: 'string', description: 'Conteúdo da mensagem a enviar' },
+        tipo: { type: 'string', enum: ['texto', 'audio'], description: 'texto (padrão) ou audio (só quando explicitamente pedido)' },
+      },
+      required: ['destinatario', 'mensagem'],
+    },
+  },
+
   // ── Escalação ─────────────────────────────────────────────────────────────
   {
     name: 'notificar_robinson',
@@ -396,6 +422,44 @@ async function executarFerramenta(nome, input, numero) {
     case 'gerar_pdf': return { __pdf_pendente: true, ...input };
     case 'configurar_lembretes': return { sucesso: true, preferencias: setPrefs(numero, input) };
     case 'ver_preferencias': return getPrefs(numero);
+    case 'enviar_mensagem_usuario': {
+      const config = require('./config');
+      const { enviarTexto, enviarAudio } = require('./evolution');
+      
+      // Encontra número do destinatário
+      const nomeDestino = (input.destinatario || '').toLowerCase();
+      let numeroDestino = null;
+      for (const [num, usr] of Object.entries(config.USUARIOS)) {
+        if (usr.nome.toLowerCase().includes(nomeDestino) || 
+            (usr.diretor || '').toLowerCase() === nomeDestino) {
+          numeroDestino = num;
+          break;
+        }
+      }
+      
+      if (!numeroDestino) {
+        return { erro: `Usuário ${input.destinatario} não encontrado. Disponíveis: Gustavo, Robinson, Ana Carolina, Eduardo.` };
+      }
+      
+      const tipo = input.tipo || 'texto';
+      
+      if (tipo === 'audio') {
+        // Gera áudio via ElevenLabs
+        const audioBuffer = await gerarAudio(input.mensagem);
+        if (audioBuffer) {
+          await enviarAudio(numeroDestino, audioBuffer);
+          return { sucesso: true, tipo: 'audio', destinatario: input.destinatario, numero: numeroDestino };
+        } else {
+          // Fallback para texto se áudio falhar
+          await enviarTexto(numeroDestino, input.mensagem);
+          return { sucesso: true, tipo: 'texto_fallback', aviso: 'ElevenLabs indisponível, enviado como texto', destinatario: input.destinatario };
+        }
+      } else {
+        await enviarTexto(numeroDestino, input.mensagem);
+        return { sucesso: true, tipo: 'texto', destinatario: input.destinatario, numero: numeroDestino };
+      }
+    }
+    
     case 'notificar_robinson': return { __notificar_robinson: true, ...input };
     default: return { erro: `Ferramenta desconhecida: ${nome}` };
   }
