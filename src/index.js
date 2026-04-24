@@ -6,6 +6,7 @@ const { processarMensagem } = require('./agent');
 const { downloadMedia, transcreverAudio, analisarImagem } = require('./media');
 const { enviarTexto, marcarLida, digitando } = require('./evolution');
 const { uploadImagem } = require('./tools/memorando');
+const { iniciarScheduler } = require('./scheduler');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -34,10 +35,7 @@ app.post('/webhook', async (req, res) => {
       payload.data?.messages?.[0] ||
       payload.data;
 
-    if (!message) {
-      console.log('[webhook] Nenhuma mensagem encontrada');
-      return;
-    }
+    if (!message) return;
 
     const fromMe = message.key?.fromMe || payload.data?.key?.fromMe;
     if (fromMe) return;
@@ -45,15 +43,10 @@ app.post('/webhook', async (req, res) => {
     const jid =
       message.key?.remoteJid ||
       payload.data?.key?.remoteJid ||
-      payload.sender ||
-      '';
+      payload.sender || '';
 
     const numero = jid.replace('@s.whatsapp.net', '').replace('@c.us', '').replace(/[^0-9]/g, '');
-
-    if (!numero) {
-      console.log('[webhook] Número não encontrado');
-      return;
-    }
+    if (!numero) return;
 
     console.log(`[webhook] Número: ${numero}`);
 
@@ -71,7 +64,6 @@ app.post('/webhook', async (req, res) => {
 
     const messageContent = message.message || payload.data?.message || {};
     const messageType = Object.keys(messageContent)[0] || '';
-
     console.log(`[webhook] Tipo: ${messageType}`);
 
     let textoFinal = '';
@@ -81,8 +73,7 @@ app.post('/webhook', async (req, res) => {
     if (messageType === 'conversation' || messageType === 'extendedTextMessage') {
       textoFinal =
         messageContent?.conversation ||
-        messageContent?.extendedTextMessage?.text ||
-        '';
+        messageContent?.extendedTextMessage?.text || '';
 
     } else if (messageType === 'audioMessage' || messageType === 'pttMessage') {
       await digitando(numero, 3000);
@@ -102,12 +93,8 @@ app.post('/webhook', async (req, res) => {
       const base64Img = await downloadMedia(messageKey, config.EVOLUTION_INSTANCE);
       const caption = messageContent?.imageMessage?.caption || '';
       const mimeType = messageContent?.imageMessage?.mimetype || 'image/jpeg';
-
       if (base64Img) {
-        // Faz upload da imagem no Base44 para obter URL pública
         imagemUrl = await uploadImagem(base64Img, mimeType);
-        console.log(`[webhook] Imagem URL: ${imagemUrl}`);
-
         descricaoImagem = await analisarImagem(base64Img, mimeType, caption || undefined);
         textoFinal = caption || '(imagem enviada sem legenda)';
       } else {
@@ -139,12 +126,9 @@ app.post('/webhook', async (req, res) => {
     await enviarTexto(numero, resposta);
 
     if (notificarRobinson && numero !== config.ROBINSON_NUMBER) {
-      const msgRobinson =
-        `🔔 *Solicitação fora do escopo*\n\n` +
-        `👤 Solicitante: ${notificarRobinson.solicitante}\n` +
-        `📋 Descrição: ${notificarRobinson.descricao}\n\n` +
-        `_Assistente Cobertex_`;
-      await enviarTexto(config.ROBINSON_NUMBER, msgRobinson);
+      await enviarTexto(config.ROBINSON_NUMBER,
+        `🔔 *Solicitação fora do escopo*\n\n👤 ${notificarRobinson.solicitante}\n📋 ${notificarRobinson.descricao}\n\n_Assistente Cobertex_`
+      );
     }
 
   } catch (err) {
@@ -157,9 +141,12 @@ app.listen(config.PORT, () => {
   console.log(`\n🏗️  Cobertex Agent rodando na porta ${config.PORT}`);
   console.log(`📱 Instância Evolution: ${config.EVOLUTION_INSTANCE}`);
   console.log(`🔗 Base44 App: ${config.BASE44_APP_ID}`);
-  console.log(`\n👥 Usuários configurados:`);
+  console.log(`\n👥 Usuários:`);
   for (const [num, usr] of Object.entries(config.USUARIOS)) {
-    console.log(`   ${num} → ${usr.nome} (${usr.role}) | user_id: ${usr.user_id || '⚠️ NÃO CONFIGURADO'}`);
+    console.log(`   ${num} → ${usr.nome} (${usr.role})${usr.diretor ? ` | agenda: ${usr.diretor}` : ''}`);
   }
-  console.log('\n✅ Aguardando webhooks...\n');
+  console.log('');
+
+  // Inicia o scheduler de lembretes e resumos
+  iniciarScheduler();
 });
