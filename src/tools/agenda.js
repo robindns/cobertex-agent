@@ -34,7 +34,7 @@ async function atualizarEvento({ evento_id, campos }) {
  * Exclui um evento permanentemente
  */
 async function excluirEvento({ evento_id }) {
-  await base44.delete('EventoAgenda', evento_id);
+  await base44.remove('EventoAgenda', evento_id);
   return { excluido: true, evento_id };
 }
 
