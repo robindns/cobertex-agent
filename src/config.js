@@ -7,7 +7,6 @@ const config = {
   ANTHROPIC_API_KEY: process.env.ANTHROPIC_API_KEY,
   OPENAI_API_KEY: process.env.OPENAI_API_KEY,
   ELEVENLABS_API_KEY: process.env.ELEVENLABS_API_KEY,
-  ELEVENLABS_VOICE_ID: process.env.ELEVENLABS_VOICE_ID || 'pNInz6obpgDQGcFmaJgB',
 
   EVOLUTION_API_URL: process.env.EVOLUTION_API_URL,
   EVOLUTION_API_KEY: process.env.EVOLUTION_API_KEY,
@@ -17,19 +16,24 @@ const config = {
   BASE44_API_KEY: process.env.BASE44_API_KEY,
   BASE44_BASE_URL: 'https://cobertex-crm-dc1fb74c.base44.app/api',
 
-  // Mapeamento número → usuário do sistema
+  // ImgBB — upload de imagens (gratuito, sem conta)
+  // Pegue sua API key em: https://api.imgbb.com
+  IMGBB_API_KEY: process.env.IMGBB_API_KEY,
+
+  SISTEMA_URL: 'https://app.cobertex.com.br',
+
   USUARIOS: {
     '5511947436391': {
       nome: 'Gustavo',
       user_id: '69414c74045c6d5de75ac756',
       role: 'operacional',
-      diretor: 'gustavo', // chave da agenda
+      diretor: 'gustavo',
     },
     '5511995692963': {
       nome: 'Robinson',
       user_id: '689c9b61f29b5c46dc1fb74d',
       role: 'admin',
-      diretor: null, // Robinson não tem agenda de diretor
+      diretor: null,
     },
     '5511925122380': {
       nome: 'Cobertex',
@@ -60,6 +64,10 @@ for (const key of required) {
     console.error(`❌ Variável obrigatória não definida: ${key}`);
     process.exit(1);
   }
+}
+
+if (!config.IMGBB_API_KEY) {
+  console.warn('⚠️  ImgBB não configurado — uploads de imagem desativados');
 }
 
 module.exports = config;

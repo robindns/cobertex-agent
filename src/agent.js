@@ -2,7 +2,7 @@
 const Anthropic = require('@anthropic-ai/sdk');
 const config = require('./config');
 const memorandoTools = require('./tools/memorando');
-const clienteTools = require('./tools/clientes');
+const crmTools = require('./tools/crm');
 const agendaTools = require('./tools/agenda');
 const { getPrefs, setPrefs } = require('./scheduler');
 
@@ -12,11 +12,10 @@ const TOOLS = [
   // ── Memorandos ────────────────────────────────────────────────────────────
   {
     name: 'criar_memorando',
-    description: `Cria memorando operacional. Use para: saída de equipes, chegadas, ocorrências, relatos de campo.
-Se houver imagemUrl no contexto, inclua em anexos[].
+    description: `Cria memorando operacional. Use para: saída/chegada de equipes, ocorrências, relatos de campo.
+Se houver midiaUrl no contexto, inclua em anexos[].
 Detecte urgência: urgente, emergência, acidente, quebrou.
-Tags: saida, chegada, equipe, caminhao, montagem, desmontagem, manutencao, ocorrencia.
-Novos campos opcionais: tag_livro (para Livro de Ocorrências), tag_eduardo (para centro de custos Eduardo).`,
+Campos especiais: tag_livro (Livro de Ocorrências), tag_eduardo (centro de custos).`,
     input_schema: {
       type: 'object',
       properties: {
@@ -28,8 +27,8 @@ Novos campos opcionais: tag_livro (para Livro de Ocorrências), tag_eduardo (par
         urgente: { type: 'boolean' },
         tags: { type: 'array', items: { type: 'string' } },
         anexos: { type: 'array', items: { type: 'string' } },
-        tag_livro: { type: 'boolean', description: 'Marcar para o Livro de Ocorrências' },
-        tag_eduardo: { type: 'boolean', description: 'Marcar para seção Eduardo (centro de custos)' },
+        tag_livro: { type: 'boolean' },
+        tag_eduardo: { type: 'boolean' },
         tags_livro: { type: 'array', items: { type: 'string' } },
         tags_eduardo: { type: 'array', items: { type: 'string' } },
       },
@@ -38,26 +37,24 @@ Novos campos opcionais: tag_livro (para Livro de Ocorrências), tag_eduardo (par
   },
   {
     name: 'buscar_memorandos',
-    description: `Busca memorandos por texto livre, nome de pessoa, veículo, data ou qualquer termo.
-Use quando o usuário perguntar sobre o que alguém fez, o que aconteceu, histórico de uma pessoa/veículo/cliente.
-Exemplos: "o que Pastel fez ontem?", "memorandos do caminhão W2", "o que aconteceu hoje de manhã".
-O campo texto faz busca no título, conteúdo e tags.
-Para data: use "hoje", "ontem", ou formato DD/MM/YYYY.`,
+    description: `Busca memorandos por texto livre. SEMPRE use antes de dizer que não encontrou algo.
+Busca em: título, conteúdo transcrito, tags.
+Exemplos: "o que Pastel fez ontem?", "caminhão W2", "ocorrências de hoje".`,
     input_schema: {
       type: 'object',
       properties: {
-        texto: { type: 'string', description: 'Termo a buscar (nome, veículo, palavra-chave)' },
-        data: { type: 'string', description: 'Data: "hoje", "ontem", "23/04/2026" ou "2026-04-23"' },
+        texto: { type: 'string' },
+        data: { type: 'string', description: '"hoje", "ontem", "23/04/2026"' },
         cliente_id: { type: 'string' },
         status: { type: 'string', enum: ['pendente', 'concluido'] },
-        limit: { type: 'number', description: 'Máximo de resultados (padrão 100)' },
+        limit: { type: 'number' },
       },
       required: [],
     },
   },
   {
     name: 'listar_memorandos',
-    description: 'Lista memorandos recentes sem filtro de texto. Use para ver os últimos registros.',
+    description: 'Lista memorandos recentes sem filtro.',
     input_schema: {
       type: 'object',
       properties: {
@@ -70,30 +67,28 @@ Para data: use "hoje", "ontem", ou formato DD/MM/YYYY.`,
   },
   {
     name: 'atualizar_memorando',
-    description: 'Atualiza campos de um memorando existente (título, conteúdo, tags, etc). Use quando usuário quiser editar/corrigir um memorando.',
+    description: 'Atualiza campos de um memorando existente.',
     input_schema: {
       type: 'object',
       properties: {
         memorando_id: { type: 'string' },
-        campos: { type: 'object', description: 'Campos a atualizar com novos valores' },
+        campos: { type: 'object' },
       },
       required: ['memorando_id', 'campos'],
     },
   },
   {
     name: 'excluir_memorando',
-    description: 'Exclui um memorando permanentemente. Só use após o usuário confirmar explicitamente a exclusão.',
+    description: 'Exclui memorando permanentemente. Só use após confirmação explícita.',
     input_schema: {
       type: 'object',
-      properties: {
-        memorando_id: { type: 'string' },
-      },
+      properties: { memorando_id: { type: 'string' } },
       required: ['memorando_id'],
     },
   },
   {
     name: 'adicionar_anexos_memorando',
-    description: 'Adiciona imagens a memorando existente. Use quando usuário confirmar que quer anexar imagem ao memorando anterior.',
+    description: 'Adiciona imagens/arquivos a memorando existente.',
     input_schema: {
       type: 'object',
       properties: {
@@ -113,12 +108,128 @@ Para data: use "hoje", "ontem", ou formato DD/MM/YYYY.`,
     },
   },
 
+  // ── CRM — Leads ───────────────────────────────────────────────────────────
+  {
+    name: 'listar_leads',
+    description: `Lista leads. Leads são contatos que passaram pela triagem comercial.
+Estágios: novo → contatado → qualificado → proposta_enviada → convertido → perdido.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['novo', 'contatado', 'qualificado', 'proposta_enviada', 'convertido', 'perdido'] },
+        responsavel: { type: 'string' },
+        limit: { type: 'number' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'buscar_lead',
+    description: 'Busca lead por nome, empresa ou telefone.',
+    input_schema: {
+      type: 'object',
+      properties: { texto: { type: 'string' }, limit: { type: 'number' } },
+      required: ['texto'],
+    },
+  },
+  {
+    name: 'atualizar_lead',
+    description: 'Atualiza dados ou status de um lead.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        lead_id: { type: 'string' },
+        campos: { type: 'object' },
+      },
+      required: ['lead_id', 'campos'],
+    },
+  },
+
+  // ── CRM — Atendimentos ────────────────────────────────────────────────────
+  {
+    name: 'listar_atendimentos',
+    description: `Lista atendimentos/contatos recebidos (formulário, WhatsApp, site, telefone).
+Atendimentos são primeiros contatos — podem ou não virar leads após triagem.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['novo', 'em_analise', 'contatado', 'aguardando_retorno', 'convertido_lead', 'descartado'] },
+        origem: { type: 'string' },
+        limit: { type: 'number' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'buscar_atendimento',
+    description: 'Busca atendimento por nome, empresa ou local.',
+    input_schema: {
+      type: 'object',
+      properties: { texto: { type: 'string' }, limit: { type: 'number' } },
+      required: ['texto'],
+    },
+  },
+
+  // ── CRM — Clientes / Instalações / Propostas ──────────────────────────────
+  {
+    name: 'listar_clientes',
+    description: 'Lista clientes do sistema.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        status: { type: 'string', enum: ['ativo', 'inativo', 'prospecto'] },
+        cidade: { type: 'string' },
+        limit: { type: 'number' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'buscar_cliente',
+    description: 'Busca cliente por nome ou documento.',
+    input_schema: {
+      type: 'object',
+      properties: { nome: { type: 'string' } },
+      required: ['nome'],
+    },
+  },
+  {
+    name: 'listar_instalacoes',
+    description: 'Lista instalações, com filtro de status ou cliente.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cliente_id: { type: 'string' },
+        status: { type: 'string', enum: ['prevista', 'em_instalacao', 'ativa', 'encerrada', 'manutencao'] },
+        limit: { type: 'number' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'listar_propostas',
+    description: 'Lista propostas enviadas.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cliente_id: { type: 'string' },
+        status: { type: 'string', enum: ['rascunho', 'enviada', 'aprovada', 'rejeitada', 'expirada'] },
+        limit: { type: 'number' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'resumo_estrategico',
+    description: `Gera resumo estratégico completo: clientes, leads, atendimentos, instalações, propostas, taxa de conversão.
+Use para: "como estamos?", "status geral", "relatório executivo", "quantos leads temos?".`,
+    input_schema: { type: 'object', properties: {}, required: [] },
+  },
+
   // ── Agenda ────────────────────────────────────────────────────────────────
   {
     name: 'criar_evento_agenda',
-    description: `Cria evento, reunião, compromisso ou lembrete na agenda pessoal.
-Use quando: "agendar", "marcar reunião", "criar lembrete", "tenho compromisso às X".
-Data no formato ISO: "2026-04-24T10:00:00".`,
+    description: 'Cria evento, reunião, compromisso ou lembrete na agenda pessoal.',
     input_schema: {
       type: 'object',
       properties: {
@@ -139,7 +250,7 @@ Data no formato ISO: "2026-04-24T10:00:00".`,
   },
   {
     name: 'listar_eventos_agenda',
-    description: 'Lista eventos da agenda. Use para: "minha agenda", "próximos compromissos", "o que tenho essa semana".',
+    description: 'Lista eventos da agenda.',
     input_schema: {
       type: 'object',
       properties: {
@@ -156,15 +267,13 @@ Data no formato ISO: "2026-04-24T10:00:00".`,
     description: 'Lista eventos de hoje da agenda.',
     input_schema: {
       type: 'object',
-      properties: {
-        diretor: { type: 'string', enum: ['ana', 'gustavo', 'eduardo', 'diego'] },
-      },
+      properties: { diretor: { type: 'string', enum: ['ana', 'gustavo', 'eduardo', 'diego'] } },
       required: ['diretor'],
     },
   },
   {
     name: 'atualizar_evento_agenda',
-    description: 'Atualiza dados de um evento (horário, local, título, etc).',
+    description: 'Atualiza dados de um evento.',
     input_schema: {
       type: 'object',
       properties: {
@@ -176,7 +285,7 @@ Data no formato ISO: "2026-04-24T10:00:00".`,
   },
   {
     name: 'excluir_evento_agenda',
-    description: 'Exclui um evento permanentemente da agenda. Só use após o usuário confirmar explicitamente.',
+    description: 'Exclui evento permanentemente. Só use após confirmação explícita.',
     input_schema: {
       type: 'object',
       properties: { evento_id: { type: 'string' } },
@@ -184,13 +293,27 @@ Data no formato ISO: "2026-04-24T10:00:00".`,
     },
   },
 
+  // ── PDF ───────────────────────────────────────────────────────────────────
+  {
+    name: 'gerar_pdf',
+    description: `Gera relatório em PDF e envia pelo WhatsApp.
+Use quando: "gera um PDF", "quero exportar", "relatório em PDF".
+Pode incluir dados de memorandos, leads, atendimentos, etc.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        titulo: { type: 'string' },
+        conteudo: { type: 'string', description: 'Texto introdutório' },
+        dados: { type: 'array', items: { type: 'object' }, description: 'Dados estruturados' },
+      },
+      required: ['titulo'],
+    },
+  },
+
   // ── Preferências ──────────────────────────────────────────────────────────
   {
     name: 'configurar_lembretes',
-    description: `Configura notificações da agenda. Use quando o usuário disser:
-- "quero ser avisado X min antes" → minutosAntes: X
-- "ativar resumo diário às Xh" → resumoDiario: true, horaResumo: "HH:MM"
-- "desativar lembretes" → lembretes: false`,
+    description: 'Configura notificações de agenda.',
     input_schema: {
       type: 'object',
       properties: {
@@ -204,34 +327,14 @@ Data no formato ISO: "2026-04-24T10:00:00".`,
   },
   {
     name: 'ver_preferencias',
-    description: 'Mostra configurações atuais de notificação do usuário.',
+    description: 'Mostra configurações atuais de notificação.',
     input_schema: { type: 'object', properties: {}, required: [] },
-  },
-
-  // ── Clientes ──────────────────────────────────────────────────────────────
-  {
-    name: 'buscar_cliente',
-    description: 'Busca clientes pelo nome.',
-    input_schema: {
-      type: 'object',
-      properties: { nome: { type: 'string' } },
-      required: ['nome'],
-    },
-  },
-  {
-    name: 'listar_instalacoes_cliente',
-    description: 'Lista instalações de um cliente.',
-    input_schema: {
-      type: 'object',
-      properties: { cliente_id: { type: 'string' } },
-      required: ['cliente_id'],
-    },
   },
 
   // ── Escalação ─────────────────────────────────────────────────────────────
   {
     name: 'notificar_robinson',
-    description: 'Use quando a solicitação estiver fora do escopo.',
+    description: 'Use para solicitações que precisam da atenção de Robinson.',
     input_schema: {
       type: 'object',
       properties: {
@@ -247,42 +350,35 @@ async function executarFerramenta(nome, input, numero) {
   console.log(`[agent] Tool: ${nome}`);
 
   switch (nome) {
-    case 'criar_memorando':
-      return memorandoTools.criarMemorando(input);
-    case 'buscar_memorandos':
-      return memorandoTools.buscarMemorandos(input);
-    case 'listar_memorandos':
-      return memorandoTools.listarMemorandos(input);
-    case 'atualizar_memorando':
-      return memorandoTools.atualizarMemorando(input);
-    case 'excluir_memorando':
-      return memorandoTools.excluirMemorando(input);
-    case 'adicionar_anexos_memorando':
-      return memorandoTools.adicionarAnexos(input);
-    case 'concluir_memorando':
-      return memorandoTools.concluirMemorando(input);
-    case 'criar_evento_agenda':
-      return agendaTools.criarEvento(input);
-    case 'listar_eventos_agenda':
-      return agendaTools.listarEventos(input);
-    case 'eventos_hoje':
-      return agendaTools.eventosHoje(input);
-    case 'atualizar_evento_agenda':
-      return agendaTools.atualizarEvento(input);
-    case 'excluir_evento_agenda':
-      return agendaTools.excluirEvento(input);
-    case 'configurar_lembretes':
-      return { sucesso: true, preferencias: setPrefs(numero, input) };
-    case 'ver_preferencias':
-      return getPrefs(numero);
-    case 'buscar_cliente':
-      return clienteTools.buscarCliente(input);
-    case 'listar_instalacoes_cliente':
-      return clienteTools.listarInstalacoesCliente(input);
-    case 'notificar_robinson':
-      return { __notificar_robinson: true, ...input };
-    default:
-      return { erro: `Ferramenta desconhecida: ${nome}` };
+    case 'criar_memorando': return memorandoTools.criarMemorando(input);
+    case 'buscar_memorandos': return memorandoTools.buscarMemorandos(input);
+    case 'listar_memorandos': return memorandoTools.listarMemorandos(input);
+    case 'atualizar_memorando': return memorandoTools.atualizarMemorando(input);
+    case 'excluir_memorando': return memorandoTools.excluirMemorando(input);
+    case 'adicionar_anexos_memorando': return memorandoTools.adicionarAnexos(input);
+    case 'concluir_memorando': return memorandoTools.concluirMemorando(input);
+    case 'listar_leads': return crmTools.listarLeads(input);
+    case 'buscar_lead': return crmTools.buscarLead(input);
+    case 'atualizar_lead': return crmTools.atualizarLead(input);
+    case 'listar_atendimentos': return crmTools.listarAtendimentos(input);
+    case 'buscar_atendimento': return crmTools.buscarAtendimento(input);
+    case 'listar_clientes': return crmTools.listarClientes(input);
+    case 'buscar_cliente': return crmTools.buscarCliente(input);
+    case 'listar_instalacoes':
+      if (input.cliente_id) return crmTools.listarInstalacoesCliente(input);
+      return crmTools.listarInstalacoes(input);
+    case 'listar_propostas': return crmTools.listarPropostas(input);
+    case 'resumo_estrategico': return crmTools.resumoEstrategico();
+    case 'criar_evento_agenda': return agendaTools.criarEvento(input);
+    case 'listar_eventos_agenda': return agendaTools.listarEventos(input);
+    case 'eventos_hoje': return agendaTools.eventosHoje(input);
+    case 'atualizar_evento_agenda': return agendaTools.atualizarEvento(input);
+    case 'excluir_evento_agenda': return agendaTools.excluirEvento(input);
+    case 'gerar_pdf': return { __pdf_pendente: true, ...input };
+    case 'configurar_lembretes': return { sucesso: true, preferencias: setPrefs(numero, input) };
+    case 'ver_preferencias': return getPrefs(numero);
+    case 'notificar_robinson': return { __notificar_robinson: true, ...input };
+    default: return { erro: `Ferramenta desconhecida: ${nome}` };
   }
 }
 
@@ -301,7 +397,7 @@ function adicionarAoHistorico(numero, role, content) {
   if (hist.length > MAX_HISTORICO) historicos[numero] = hist.slice(-MAX_HISTORICO);
 }
 
-async function processarMensagem({ numero, usuario, texto, imagemUrl, descricaoImagem }) {
+async function processarMensagem({ numero, usuario, texto, midiaUrl, midiaInfo, descricaoImagem }) {
   const hoje = new Date().toLocaleDateString('pt-BR', {
     weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric',
     hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
@@ -311,62 +407,54 @@ async function processarMensagem({ numero, usuario, texto, imagemUrl, descricaoI
   const prefs = getPrefs(numero);
 
   let contextoExtra = '';
-  if (imagemUrl) {
-    contextoExtra += `\n\n📎 IMAGEM RECEBIDA: ${imagemUrl}`;
+  if (midiaUrl) {
+    contextoExtra += `\n\n📎 MÍDIA RECEBIDA COM URL PÚBLICA: ${midiaUrl}`;
+    if (midiaInfo) contextoExtra += ` (${midiaInfo.tipo})`;
     if (ultimoMemorando[numero]) {
       contextoExtra += `\n⚠️ Memorando recente: ID=${ultimoMemorando[numero].id}, título="${ultimoMemorando[numero].titulo}". Pergunte se quer ANEXAR ao anterior ou CRIAR novo.`;
+    } else {
+      contextoExtra += `\nSe criar memorando, inclua esta URL em anexos[].`;
     }
   }
-  if (descricaoImagem) {
-    contextoExtra += `\n🖼️ DESCRIÇÃO DA IMAGEM: ${descricaoImagem}`;
-  }
+  if (descricaoImagem) contextoExtra += `\n🖼️ DESCRIÇÃO DA IMAGEM: ${descricaoImagem}`;
 
-  const systemPrompt = `Você é o assistente IA da Cobertex, empresa de coberturas em São Paulo.
+  const systemPrompt = `Você é o assistente pessoal IA da Cobertex, empresa de coberturas e galpões em São Paulo.
 Hoje é ${hoje}.
 
 ## Usuário
-- Nome: ${usuario.nome}
-- ID: ${usuario.user_id}
-- Perfil: ${usuario.role}
-${temAgenda ? `- Agenda: diretor="${usuario.diretor}"` : ''}
+- Nome: ${usuario.nome} | ID: ${usuario.user_id} | Perfil: ${usuario.role}
+${temAgenda ? `- Agenda pessoal: diretor="${usuario.diretor}"` : ''}
+- Notificações: ${prefs.lembretes ? `lembretes ${prefs.minutosAntes}min antes` : 'sem lembretes'} | ${prefs.resumoDiario ? `resumo às ${prefs.horaResumo}` : 'sem resumo diário'}
 
-## Preferências de notificação
-- Lembretes: ${prefs.lembretes ? `✅ ${prefs.minutosAntes} min antes` : '❌ desativados'}
-- Resumo diário: ${prefs.resumoDiario ? `✅ às ${prefs.horaResumo}` : '❌ desativado'}
+## Capacidades completas
+1. Memorandos operacionais — criar, buscar, editar, excluir, anexar mídia
+2. CRM completo — clientes, leads, atendimentos, propostas, instalações
+3. Agenda pessoal ${temAgenda ? `(diretor="${usuario.diretor}")` : '(apenas diretores)'}
+4. Relatórios em PDF — gerados e enviados direto pelo WhatsApp
+5. Análise estratégica — resumos, métricas, tendências do negócio
 
-## Capacidades
-1. **Memorandos** — criar, buscar, listar, editar, excluir
-2. **Agenda pessoal** ${temAgenda ? `(diretor="${usuario.diretor}")` : '(apenas diretores)'}
-3. **Busca inteligente** — busca por nome de pessoa, veículo, data em memorandos
-4. **Notificações** — configurar lembretes e resumo diário
+## Funil comercial Cobertex
+ATENDIMENTO → LEAD → PROPOSTA → CLIENTE
+- Atendimento: Primeiro contato de interesse. Ainda não qualificado. Pode ser de qualquer origem.
+- Lead: Passou pela triagem comercial. Tem potencial real. Avança por estágios.
+- Proposta: Enviada ao lead qualificado.
+- Cliente: Lead convertido após proposta aprovada.
+⚠️ Atendimentos ≠ Leads — são etapas diferentes do funil!
 
-## Regras importantes
+## Regras
 - criador_id = "${usuario.user_id}" nos memorandos
 - diretor = "${usuario.diretor || 'N/A'}" na agenda
-- Para BUSCAR por nome/pessoa/veículo → use SEMPRE buscar_memorandos IMEDIATAMENTE sem perguntar. Nunca peça confirmação antes de buscar. Se o usuário mencionar qualquer nome, apelido, veículo, palavra-chave → busque direto e apresente os resultados.
-- Se não encontrar nada → aí sim informe que não há registros e ofereça alternativas
-- Para EXCLUIR memorando ou evento → peça confirmação ANTES, depois execute
-- Para EDITAR → pergunte se quer sobrescrever o atual ou criar novo
-- Se imagem com URL → inclua nos anexos[] do memorando
-- Se memorando recente e chegar imagem → pergunte antes de criar novo
-- Respostas curtas e objetivas
-
-## Formato de busca/relatório de memorandos
-Quando buscar memorandos com resultados, apresente assim:
-*Registros de [termo] em [data]:*
-1. *[Título]* — [hora]
-• [resumo do conteúdo]
-2. ...
-
-## Confirmações
-Memorando criado: ✅ *Registrado* — [título] 🏷️ [tags]
-Evento criado: ✅ *Agendado* — [título] 📅 [data/hora]
-Excluído: 🗑️ *Excluído* — [título]
-Editado: ✏️ *Atualizado* — [título]${contextoExtra}`;
+- BUSCA: Para qualquer nome/apelido/veículo → use buscar_memorandos IMEDIATAMENTE sem perguntar
+- MÍDIA: Se midiaUrl existe → inclua em anexos[] ao criar memorando
+- EXCLUIR: Confirme antes. Após confirmação → execute.
+- EDITAR: Pergunte se quer sobrescrever ou criar novo
+- PDF: Use gerar_pdf e avise que está gerando — será enviado em seguida
+- Para uploads grandes → indique ${config.SISTEMA_URL}
+- Respostas objetivas. Para diretores, pode ser mais analítico e estratégico.${contextoExtra}`;
 
   let userContent = texto || '';
-  if (imagemUrl) {
-    userContent = `[Imagem. URL: ${imagemUrl}. Descrição: ${descricaoImagem}]\n\n${userContent}`;
+  if (midiaUrl) {
+    userContent = `[Mídia recebida. URL: ${midiaUrl}. Tipo: ${midiaInfo?.tipo}. Descrição: ${descricaoImagem || 'N/A'}]\n\n${userContent}`;
   } else if (descricaoImagem) {
     userContent = `[Imagem. Descrição: ${descricaoImagem}]\n\n${userContent}`;
   }
@@ -376,13 +464,14 @@ Editado: ✏️ *Atualizado* — [título]${contextoExtra}`;
 
   let resposta = '';
   let notificarRobinson = null;
+  let pdfPendente = null;
   let continuar = true;
   let mensagensAtuais = [...messages];
 
   while (continuar) {
     const response = await anthropic.messages.create({
       model: 'claude-opus-4-5',
-      max_tokens: 2048,
+      max_tokens: 3000,
       system: systemPrompt,
       tools: TOOLS,
       messages: mensagensAtuais,
@@ -398,8 +487,16 @@ Editado: ✏️ *Atualizado* — [título]${contextoExtra}`;
         if (toolUse.name === 'criar_memorando' && resultado?.id) {
           ultimoMemorando[numero] = { id: resultado.id, titulo: resultado.titulo };
         }
-        if (resultado?.__notificar_robinson) {
-          notificarRobinson = resultado;
+        if (resultado?.__notificar_robinson) notificarRobinson = resultado;
+        if (resultado?.__pdf_pendente) {
+          pdfPendente = resultado;
+          // Retorna confirmação ao Claude
+          toolResults.push({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: JSON.stringify({ sucesso: true, mensagem: 'PDF será gerado e enviado pelo WhatsApp agora.' }),
+          });
+          continue;
         }
 
         toolResults.push({
@@ -419,7 +516,7 @@ Editado: ✏️ *Atualizado* — [título]${contextoExtra}`;
   }
 
   adicionarAoHistorico(numero, 'assistant', resposta);
-  return { resposta, notificarRobinson };
+  return { resposta, notificarRobinson, pdfPendente };
 }
 
 module.exports = { processarMensagem };

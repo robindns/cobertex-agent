@@ -1,6 +1,5 @@
 // src/evolution.js
 const axios = require('axios');
-const FormData = require('form-data');
 const config = require('./config');
 
 const evClient = axios.create({
@@ -9,9 +8,6 @@ const evClient = axios.create({
   timeout: 15000,
 });
 
-/**
- * Envia mensagem de texto
- */
 async function enviarTexto(numero, texto) {
   try {
     await evClient.post(`/message/sendText/${config.EVOLUTION_INSTANCE}`, {
@@ -19,13 +15,10 @@ async function enviarTexto(numero, texto) {
       text: texto,
     });
   } catch (err) {
-    console.error('[evolution] Erro ao enviar texto:', err.response?.data || err.message);
+    console.error('[evolution] Erro texto:', err.response?.data || err.message);
   }
 }
 
-/**
- * Envia áudio (Buffer MP3) como mensagem de voz
- */
 async function enviarAudio(numero, audioBuffer) {
   try {
     const base64 = audioBuffer.toString('base64');
@@ -37,13 +30,10 @@ async function enviarAudio(numero, audioBuffer) {
       fileName: 'resposta.mp3',
     });
   } catch (err) {
-    console.error('[evolution] Erro ao enviar áudio:', err.response?.data || err.message);
+    console.error('[evolution] Erro áudio:', err.response?.data || err.message);
   }
 }
 
-/**
- * Envia imagem com legenda
- */
 async function enviarImagem(numero, base64Img, legenda = '') {
   try {
     await evClient.post(`/message/sendMedia/${config.EVOLUTION_INSTANCE}`, {
@@ -54,13 +44,25 @@ async function enviarImagem(numero, base64Img, legenda = '') {
       caption: legenda,
     });
   } catch (err) {
-    console.error('[evolution] Erro ao enviar imagem:', err.response?.data || err.message);
+    console.error('[evolution] Erro imagem:', err.response?.data || err.message);
   }
 }
 
-/**
- * Marca mensagem como lida (typing indicator)
- */
+async function enviarDocumento(numero, buffer, fileName, mimetype = 'application/pdf') {
+  try {
+    const base64 = buffer.toString('base64');
+    await evClient.post(`/message/sendMedia/${config.EVOLUTION_INSTANCE}`, {
+      number: numero,
+      mediatype: 'document',
+      mimetype,
+      media: base64,
+      fileName,
+    });
+  } catch (err) {
+    console.error('[evolution] Erro documento:', err.response?.data || err.message);
+  }
+}
+
 async function marcarLida(numero, messageKey) {
   try {
     await evClient.post(`/chat/markMessageAsRead/${config.EVOLUTION_INSTANCE}`, {
@@ -69,9 +71,6 @@ async function marcarLida(numero, messageKey) {
   } catch (_) {}
 }
 
-/**
- * Envia presença "digitando..."
- */
 async function digitando(numero, duracaoMs = 2000) {
   try {
     await evClient.post(`/chat/sendPresence/${config.EVOLUTION_INSTANCE}`, {
@@ -81,4 +80,4 @@ async function digitando(numero, duracaoMs = 2000) {
   } catch (_) {}
 }
 
-module.exports = { enviarTexto, enviarAudio, enviarImagem, marcarLida, digitando };
+module.exports = { enviarTexto, enviarAudio, enviarImagem, enviarDocumento, marcarLida, digitando };
