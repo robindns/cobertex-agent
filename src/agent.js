@@ -3,177 +3,79 @@ const Anthropic = require('@anthropic-ai/sdk');
 const config = require('./config');
 const memorandoTools = require('./tools/memorando');
 const clienteTools = require('./tools/clientes');
-const agendaTools = require('./tools/agenda');
-const { getPrefs, setPrefs } = require('./scheduler');
 
 const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
 
 const TOOLS = [
-  // ── Memorandos ────────────────────────────────────────────────────────────
   {
     name: 'criar_memorando',
-    description: `Cria memorando operacional. Use para: saída de equipes, chegadas, ocorrências, relatos de campo.
+    description: `Cria um memorando operacional no sistema Cobertex.
+Use quando o usuário quiser registrar: saída de equipes, chegada em obras,
+relatórios de campo, ocorrências, checklist de veículos, qualquer relato do dia a dia.
 Se houver imagemUrl no contexto, inclua em anexos[].
-Detecte urgência: urgente, emergência, acidente, quebrou.
-Tags: saida, chegada, equipe, caminhao, montagem, desmontagem, manutencao, ocorrencia.`,
+Detecte urgência com palavras: urgente, emergência, problema grave, quebrou, acidente.
+Tags sugeridas: saida, chegada, equipe, caminhao, montagem, desmontagem, cliente, manutencao, ocorrencia.`,
     input_schema: {
       type: 'object',
       properties: {
-        titulo: { type: 'string' },
-        conteudo: { type: 'string' },
-        criador_id: { type: 'string' },
-        cliente_id: { type: 'string' },
-        instalacao_id: { type: 'string' },
-        urgente: { type: 'boolean' },
-        tags: { type: 'array', items: { type: 'string' } },
-        anexos: { type: 'array', items: { type: 'string' } },
+        titulo: { type: 'string', description: 'Título conciso do memorando' },
+        conteudo: { type: 'string', description: 'Conteúdo completo do relato' },
+        criador_id: { type: 'string', description: 'ID do usuário criador' },
+        cliente_id: { type: 'string', description: 'ID do cliente (se mencionado)' },
+        instalacao_id: { type: 'string', description: 'ID da instalação (se mencionada)' },
+        urgente: { type: 'boolean', description: 'Se é urgente' },
+        tags: { type: 'array', items: { type: 'string' }, description: 'Tags de categorização' },
+        anexos: { type: 'array', items: { type: 'string' }, description: 'URLs de imagens/arquivos' },
       },
       required: ['titulo', 'conteudo', 'criador_id'],
     },
   },
   {
     name: 'adicionar_anexos_memorando',
-    description: 'Adiciona imagens a memorando existente. Use quando usuário confirmar que quer anexar imagem ao memorando anterior.',
+    description: `Adiciona imagens ou arquivos a um memorando já existente.
+Use quando o usuário enviar uma imagem após um memorando e quiser anexar ao memorando anterior,
+ou quando confirmar que quer adicionar a imagem a um memorando específico.`,
     input_schema: {
       type: 'object',
       properties: {
-        memorando_id: { type: 'string' },
-        novos_anexos: { type: 'array', items: { type: 'string' } },
+        memorando_id: { type: 'string', description: 'ID do memorando' },
+        novos_anexos: { type: 'array', items: { type: 'string' }, description: 'URLs das imagens a anexar' },
       },
       required: ['memorando_id', 'novos_anexos'],
     },
   },
   {
     name: 'listar_memorandos',
-    description: 'Lista memorandos recentes.',
+    description: 'Lista memorandos recentes. Use quando o usuário perguntar sobre registros, histórico do dia, etc.',
     input_schema: {
       type: 'object',
       properties: {
-        cliente_id: { type: 'string' },
-        status: { type: 'string', enum: ['pendente', 'concluido'] },
-        limit: { type: 'number' },
+        cliente_id: { type: 'string', description: 'Filtrar por cliente (opcional)' },
+        status: { type: 'string', enum: ['pendente', 'concluido'], description: 'Filtrar por status' },
+        limit: { type: 'number', description: 'Quantidade máxima (padrão 20)' },
       },
       required: [],
     },
   },
   {
     name: 'concluir_memorando',
-    description: 'Marca memorando como concluído.',
+    description: 'Marca um memorando como concluído.',
     input_schema: {
       type: 'object',
-      properties: { memorando_id: { type: 'string' } },
+      properties: {
+        memorando_id: { type: 'string', description: 'ID do memorando' },
+      },
       required: ['memorando_id'],
     },
   },
-
-  // ── Agenda ────────────────────────────────────────────────────────────────
-  {
-    name: 'criar_evento_agenda',
-    description: `Cria evento, reunião, compromisso ou lembrete na agenda pessoal.
-Use quando: "agendar", "marcar reunião", "criar lembrete", "tenho compromisso às X".
-Data no formato ISO: "2026-04-24T10:00:00".`,
-    input_schema: {
-      type: 'object',
-      properties: {
-        diretor: { type: 'string', enum: ['ana', 'gustavo', 'eduardo', 'diego'] },
-        titulo: { type: 'string' },
-        descricao: { type: 'string' },
-        data_inicio: { type: 'string' },
-        data_fim: { type: 'string' },
-        dia_todo: { type: 'boolean' },
-        tipo: { type: 'string', enum: ['reuniao', 'compromisso', 'lembrete', 'viagem', 'pessoal', 'outro'] },
-        local: { type: 'string' },
-        lembrete_minutos: { type: 'number' },
-        recorrente: { type: 'boolean' },
-        recorrencia: { type: 'string', enum: ['diario', 'semanal', 'mensal', 'anual'] },
-      },
-      required: ['diretor', 'titulo', 'data_inicio'],
-    },
-  },
-  {
-    name: 'listar_eventos_agenda',
-    description: 'Lista eventos da agenda. Use para: "minha agenda", "próximos compromissos", "o que tenho essa semana".',
-    input_schema: {
-      type: 'object',
-      properties: {
-        diretor: { type: 'string', enum: ['ana', 'gustavo', 'eduardo', 'diego'] },
-        data_inicio_partir: { type: 'string' },
-        concluido: { type: 'boolean' },
-        limit: { type: 'number' },
-      },
-      required: ['diretor'],
-    },
-  },
-  {
-    name: 'eventos_hoje',
-    description: 'Lista eventos de hoje da agenda.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        diretor: { type: 'string', enum: ['ana', 'gustavo', 'eduardo', 'diego'] },
-      },
-      required: ['diretor'],
-    },
-  },
-  {
-    name: 'concluir_evento_agenda',
-    description: 'Marca evento como concluído.',
-    input_schema: {
-      type: 'object',
-      properties: { evento_id: { type: 'string' } },
-      required: ['evento_id'],
-    },
-  },
-  {
-    name: 'atualizar_evento_agenda',
-    description: 'Atualiza dados de um evento.',
-    input_schema: {
-      type: 'object',
-      properties: {
-        evento_id: { type: 'string' },
-        campos: { type: 'object' },
-      },
-      required: ['evento_id', 'campos'],
-    },
-  },
-
-  // ── Preferências de notificação ───────────────────────────────────────────
-  {
-    name: 'configurar_lembretes',
-    description: `Configura notificações da agenda. Use quando o usuário disser:
-- "quero ser avisado X min antes" → minutosAntes: X
-- "ativar resumo diário às Xh" → resumoDiario: true, horaResumo: "HH:MM"
-- "desativar lembretes" → lembretes: false
-- "não quero resumo" → resumoDiario: false
-- "ativar lembretes" → lembretes: true`,
-    input_schema: {
-      type: 'object',
-      properties: {
-        lembretes: { type: 'boolean', description: 'Ativar/desativar lembretes' },
-        minutosAntes: { type: 'number', description: 'Minutos antes do evento para avisar' },
-        resumoDiario: { type: 'boolean', description: 'Ativar/desativar resumo diário' },
-        horaResumo: { type: 'string', description: 'Horário do resumo ex: "08:00"' },
-      },
-      required: [],
-    },
-  },
-  {
-    name: 'ver_preferencias',
-    description: 'Mostra configurações atuais de notificação do usuário.',
-    input_schema: {
-      type: 'object',
-      properties: {},
-      required: [],
-    },
-  },
-
-  // ── Clientes ──────────────────────────────────────────────────────────────
   {
     name: 'buscar_cliente',
-    description: 'Busca clientes pelo nome.',
+    description: 'Busca clientes pelo nome para encontrar o ID.',
     input_schema: {
       type: 'object',
-      properties: { nome: { type: 'string' } },
+      properties: {
+        nome: { type: 'string', description: 'Nome ou parte do nome do cliente' },
+      },
       required: ['nome'],
     },
   },
@@ -182,28 +84,28 @@ Data no formato ISO: "2026-04-24T10:00:00".`,
     description: 'Lista instalações de um cliente.',
     input_schema: {
       type: 'object',
-      properties: { cliente_id: { type: 'string' } },
+      properties: {
+        cliente_id: { type: 'string', description: 'ID do cliente' },
+      },
       required: ['cliente_id'],
     },
   },
-
-  // ── Escalação ─────────────────────────────────────────────────────────────
   {
     name: 'notificar_robinson',
-    description: 'Use quando a solicitação estiver fora do escopo.',
+    description: 'Use quando a solicitação estiver fora do escopo (CRM, financeiro, bugs, funcionalidades inexistentes).',
     input_schema: {
       type: 'object',
       properties: {
-        solicitante: { type: 'string' },
-        descricao: { type: 'string' },
+        solicitante: { type: 'string', description: 'Nome de quem solicitou' },
+        descricao: { type: 'string', description: 'O que foi solicitado e está fora do escopo' },
       },
       required: ['solicitante', 'descricao'],
     },
   },
 ];
 
-async function executarFerramenta(nome, input, numero) {
-  console.log(`[agent] Tool: ${nome}`);
+async function executarFerramenta(nome, input) {
+  console.log(`[agent] Tool: ${nome}`, JSON.stringify(input));
 
   switch (nome) {
     case 'criar_memorando':
@@ -214,20 +116,6 @@ async function executarFerramenta(nome, input, numero) {
       return memorandoTools.listarMemorandos(input);
     case 'concluir_memorando':
       return memorandoTools.concluirMemorando(input);
-    case 'criar_evento_agenda':
-      return agendaTools.criarEvento(input);
-    case 'listar_eventos_agenda':
-      return agendaTools.listarEventos(input);
-    case 'eventos_hoje':
-      return agendaTools.eventosHoje(input);
-    case 'concluir_evento_agenda':
-      return agendaTools.concluirEvento(input);
-    case 'atualizar_evento_agenda':
-      return agendaTools.atualizarEvento(input);
-    case 'configurar_lembretes':
-      return { sucesso: true, preferencias: setPrefs(numero, input) };
-    case 'ver_preferencias':
-      return getPrefs(numero);
     case 'buscar_cliente':
       return clienteTools.buscarCliente(input);
     case 'listar_instalacoes_cliente':
@@ -239,9 +127,12 @@ async function executarFerramenta(nome, input, numero) {
   }
 }
 
+// Histórico por número (em memória)
 const historicos = {};
-const ultimoMemorando = {};
 const MAX_HISTORICO = 20;
+
+// Último memorando criado por número (para anexar imagens)
+const ultimoMemorando = {};
 
 function obterHistorico(numero) {
   if (!historicos[numero]) historicos[numero] = [];
@@ -251,7 +142,9 @@ function obterHistorico(numero) {
 function adicionarAoHistorico(numero, role, content) {
   const hist = obterHistorico(numero);
   hist.push({ role, content });
-  if (hist.length > MAX_HISTORICO) historicos[numero] = hist.slice(-MAX_HISTORICO);
+  if (hist.length > MAX_HISTORICO) {
+    historicos[numero] = hist.slice(-MAX_HISTORICO);
+  }
 }
 
 async function processarMensagem({ numero, usuario, texto, imagemUrl, descricaoImagem }) {
@@ -260,60 +153,52 @@ async function processarMensagem({ numero, usuario, texto, imagemUrl, descricaoI
     hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
   });
 
-  const temAgenda = !!usuario.diretor;
-  const prefs = getPrefs(numero);
-
+  // Contexto extra sobre imagem e último memorando
   let contextoExtra = '';
   if (imagemUrl) {
     contextoExtra += `\n\n📎 IMAGEM RECEBIDA: ${imagemUrl}`;
     if (ultimoMemorando[numero]) {
-      contextoExtra += `\n⚠️ Memorando recente: ID=${ultimoMemorando[numero].id}, título="${ultimoMemorando[numero].titulo}". Pergunte se quer ANEXAR ao anterior ou CRIAR novo.`;
+      contextoExtra += `\n⚠️ O usuário tem um memorando recente (ID: ${ultimoMemorando[numero].id}, título: "${ultimoMemorando[numero].titulo}"). Pergunte se quer ANEXAR esta imagem ao memorando anterior ou CRIAR um novo memorando com ela.`;
     }
   }
   if (descricaoImagem) {
     contextoExtra += `\n🖼️ DESCRIÇÃO DA IMAGEM: ${descricaoImagem}`;
   }
 
-  const systemPrompt = `Você é o assistente IA da Cobertex, empresa de coberturas em São Paulo.
+  const systemPrompt = `Você é o assistente IA da Cobertex, empresa de coberturas e galpões em São Paulo.
 Hoje é ${hoje}.
 
-## Usuário
+## Usuário atual
 - Nome: ${usuario.nome}
-- ID: ${usuario.user_id}
+- ID no sistema: ${usuario.user_id}
 - Perfil: ${usuario.role}
-${temAgenda ? `- Agenda: diretor="${usuario.diretor}"` : ''}
 
-## Preferências de notificação atuais
-- Lembretes: ${prefs.lembretes ? `✅ ativados (${prefs.minutosAntes} min antes)` : '❌ desativados'}
-- Resumo diário: ${prefs.resumoDiario ? `✅ ativado às ${prefs.horaResumo}` : '❌ desativado'}
-
-## Escopo
-1. Memorandos operacionais (todos)
-2. Agenda pessoal ${temAgenda ? `(diretor="${usuario.diretor}")` : '(apenas diretores)'}
-3. Configurar notificações (ativar/desativar lembretes e resumo diário)
-4. Buscar clientes
+## Seu foco
+Registrar e consultar memorandos operacionais. Respostas curtas e diretas — equipe está no campo.
 
 ## Regras
-- criador_id = "${usuario.user_id}" nos memorandos
-- diretor = "${usuario.diretor || 'N/A'}" na agenda
-- Se imagem com URL → inclua em anexos[]
-- Se memorando recente existir ao receber imagem → pergunte antes de criar novo
-- Respostas curtas e diretas
-- Fora do escopo → notificar_robinson
+- Use criador_id = "${usuario.user_id}" ao criar memorandos
+- Se vier imagem, inclua a URL nos anexos[] do memorando
+- Se houver memorando recente, PERGUNTE se quer anexar ao anterior ou criar novo
+- Confirme ações com ✅
+- Não interfira no CRM (leads, propostas, atendimentos)
+- Se fora do escopo, use notificar_robinson
 
-## Confirmações
-Memorando: ✅ *Registrado* — [título] 🏷️ [tags]
-Evento: ✅ *Agendado* — [título] 📅 [data/hora]
-Preferência: ✅ *Configurado* — [o que mudou]${contextoExtra}`;
+## Confirmação de memorando criado
+✅ *Memorando registrado*
+📋 [Título]
+🏷️ Tags: [tags]
+📎 Anexos: [quantidade de imagens, se houver]${contextoExtra}`;
 
   let userContent = texto || '';
-  if (imagemUrl) {
-    userContent = `[Imagem. URL: ${imagemUrl}. Descrição: ${descricaoImagem}]\n\n${userContent}`;
-  } else if (descricaoImagem) {
-    userContent = `[Imagem. Descrição: ${descricaoImagem}]\n\n${userContent}`;
+  if (descricaoImagem && !imagemUrl) {
+    userContent = `[Imagem enviada. Descrição: ${descricaoImagem}]\n\n${userContent}`;
+  } else if (imagemUrl) {
+    userContent = `[Imagem enviada. URL: ${imagemUrl}. Descrição: ${descricaoImagem}]\n\n${userContent}`;
   }
 
   adicionarAoHistorico(numero, 'user', userContent);
+
   const messages = obterHistorico(numero).map(m => ({ role: m.role, content: m.content }));
 
   let resposta = '';
@@ -335,11 +220,14 @@ Preferência: ✅ *Configurado* — [o que mudou]${contextoExtra}`;
       const toolResults = [];
 
       for (const toolUse of toolUseBlocks) {
-        const resultado = await executarFerramenta(toolUse.name, toolUse.input, numero);
+        const resultado = await executarFerramenta(toolUse.name, toolUse.input);
 
+        // Salva último memorando criado para contexto de anexos
         if (toolUse.name === 'criar_memorando' && resultado?.id) {
           ultimoMemorando[numero] = { id: resultado.id, titulo: resultado.titulo };
+          console.log(`[agent] Último memorando salvo: ${resultado.id}`);
         }
+
         if (resultado?.__notificar_robinson) {
           notificarRobinson = resultado;
         }
@@ -355,7 +243,10 @@ Preferência: ✅ *Configurado* — [o que mudou]${contextoExtra}`;
       mensagensAtuais.push({ role: 'user', content: toolResults });
 
     } else {
-      resposta = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+      resposta = response.content
+        .filter(b => b.type === 'text')
+        .map(b => b.text)
+        .join('\n');
       continuar = false;
     }
   }
