@@ -81,3 +81,10 @@ async function digitando(numero, duracaoMs = 2000) {
 }
 
 module.exports = { enviarTexto, enviarAudio, enviarImagem, enviarDocumento, marcarLida, digitando };
+
+/**
+ * Envia mensagem de texto para qualquer número autorizado
+ */
+async function enviarMensagemParaUsuario(numero, texto) {
+  return enviarTexto(numero, texto);
+}
