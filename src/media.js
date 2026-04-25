@@ -107,11 +107,15 @@ async function gerarAudio(texto) {
   try {
     if (!config.ELEVENLABS_API_KEY) return null;
 
+    // Limita a 500 chars para não esgotar créditos nem dar timeout
+    const textoLimitado = texto.length > 500 ? texto.substring(0, 497) + '...' : texto;
+    console.log(`[media] ElevenLabs: gerando áudio (${textoLimitado.length} chars), voice: ${config.ELEVENLABS_VOICE_ID}`);
+
     const res = await axios.post(
       `https://api.elevenlabs.io/v1/text-to-speech/${config.ELEVENLABS_VOICE_ID}`,
       {
-        text: texto,
-        model_id: 'eleven_multilingual_v2',
+        text: textoLimitado,
+        model_id: 'eleven_monolingual_v1',
         voice_settings: { stability: 0.5, similarity_boost: 0.75 },
       },
       {
@@ -127,7 +131,7 @@ async function gerarAudio(texto) {
 
     return Buffer.from(res.data);
   } catch (err) {
-    console.error('[media] Erro ao gerar áudio TTS:', err.message);
+    console.error('[media] Erro ao gerar áudio TTS:', err.message, err.response?.status, err.response?.data?.toString?.());
     return null;
   }
 }
