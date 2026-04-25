@@ -345,7 +345,8 @@ Pode incluir dados de memorandos, leads, atendimentos, etc.`,
     description: `Envia uma mensagem de texto ou áudio para outro usuário autorizado do sistema.
 Use quando: "envie uma mensagem para Gustavo", "mande boas-vindas à Ana", "avise o Eduardo", "envie um áudio para Robinson".
 Usuários disponíveis: Gustavo, Robinson, Ana Carolina, Eduardo.
-Para áudio: só gere quando explicitamente solicitado ("envie um áudio", "manda um áudio").`,
+IMPORTANTE: Se o usuário pedir "áudio", "manda um áudio", "responde em áudio" → use tipo="audio".
+Se não mencionar áudio → use tipo="texto" (padrão).`,
     input_schema: {
       type: 'object',
       properties: {
@@ -429,11 +430,18 @@ async function executarFerramenta(nome, input, numero) {
       // Encontra número do destinatário
       const nomeDestino = (input.destinatario || '').toLowerCase();
       let numeroDestino = null;
-      for (const [num, usr] of Object.entries(config.USUARIOS)) {
-        if (usr.nome.toLowerCase().includes(nomeDestino) || 
-            (usr.diretor || '').toLowerCase() === nomeDestino) {
-          numeroDestino = num;
-          break;
+      
+      // Suporta envio para si mesmo
+      const paraSimMesmo = ['eu', 'me', 'mim', 'para mim', 'mesmo', 'self'].includes(nomeDestino);
+      if (paraSimMesmo) {
+        numeroDestino = numero; // envia para quem está falando
+      } else {
+        for (const [num, usr] of Object.entries(config.USUARIOS)) {
+          if (usr.nome.toLowerCase().includes(nomeDestino) || 
+              (usr.diretor || '').toLowerCase() === nomeDestino) {
+            numeroDestino = num;
+            break;
+          }
         }
       }
       
@@ -445,7 +453,9 @@ async function executarFerramenta(nome, input, numero) {
       
       if (tipo === 'audio') {
         // Gera áudio via ElevenLabs
+        console.log('[agent] Gerando áudio via ElevenLabs para:', input.destinatario);
         const audioBuffer = await gerarAudio(input.mensagem);
+        console.log('[agent] audioBuffer:', audioBuffer ? `OK (${audioBuffer.length} bytes)` : 'NULL');
         if (audioBuffer) {
           await enviarAudio(numeroDestino, audioBuffer);
           return { sucesso: true, tipo: 'audio', destinatario: input.destinatario, numero: numeroDestino };
@@ -532,6 +542,7 @@ ATENDIMENTO → LEAD → PROPOSTA → CLIENTE
 - EXCLUIR: Confirme antes. Após confirmação → execute.
 - EDITAR: Pergunte se quer sobrescrever ou criar novo
 - PDF: Use gerar_pdf e avise que está gerando — será enviado em seguida
+- ÁUDIO: Quando pedido explicitamente ("me responde em áudio", "fala em áudio", "manda um áudio"), use enviar_mensagem_usuario com destinatario="eu" e tipo="audio". Nunca diga que não pode gerar áudio.
 - Para uploads grandes → indique ${config.SISTEMA_URL}
 - Respostas objetivas. Para diretores, pode ser mais analítico e estratégico.${contextoExtra}`;
 
