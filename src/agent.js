@@ -4,17 +4,24 @@ const config = require('./config');
 const memorandoTools = require('./tools/memorando');
 const crmTools = require('./tools/crm');
 const agendaTools = require('./tools/agenda');
+const lembretesTools = require('./tools/lembretes');
+const memoriaTools = require('./tools/memoria');
+const { gerarPDFBuffer } = require('./tools/relatorio');
 const { getPrefs, setPrefs } = require('./scheduler');
 const { gerarAudio } = require('./media');
 
 const anthropic = new Anthropic({ apiKey: config.ANTHROPIC_API_KEY });
 
-// Mapa numero -> nome para lookup reverso
-const MAPA_USUARIOS = Object.entries(require('./config').USUARIOS).reduce((acc, [num, usr]) => {
-  acc[usr.nome.toLowerCase()] = num;
-  acc[usr.diretor || ''] = num;
-  return acc;
-}, {});
+// Mapa nome → número para lookup
+function encontrarNumero(nome) {
+  const n = (nome || '').toLowerCase();
+  const paraSimMesmo = ['eu', 'me', 'mim', 'mesmo', 'self', 'para mim'].includes(n);
+  if (paraSimMesmo) return '__self__';
+  for (const [num, usr] of Object.entries(config.USUARIOS)) {
+    if (usr.nome.toLowerCase().includes(n) || (usr.diretor || '') === n) return num;
+  }
+  return null;
+}
 
 const TOOLS = [
   // ── Memorandos ────────────────────────────────────────────────────────────
@@ -23,7 +30,7 @@ const TOOLS = [
     description: `Cria memorando operacional. Use para: saída/chegada de equipes, ocorrências, relatos de campo.
 Se houver midiaUrl no contexto, inclua em anexos[].
 Detecte urgência: urgente, emergência, acidente, quebrou.
-Campos especiais: tag_livro (Livro de Ocorrências), tag_eduardo (centro de custos).`,
+tag_livro = Livro de Ocorrências, tag_eduardo = centro de custos Eduardo.`,
     input_schema: {
       type: 'object',
       properties: {
@@ -45,9 +52,8 @@ Campos especiais: tag_livro (Livro de Ocorrências), tag_eduardo (centro de cust
   },
   {
     name: 'buscar_memorandos',
-    description: `Busca memorandos por texto livre. SEMPRE use antes de dizer que não encontrou algo.
-Busca em: título, conteúdo transcrito, tags.
-Exemplos: "o que Pastel fez ontem?", "caminhão W2", "ocorrências de hoje".`,
+    description: `Busca memorandos por texto livre. SEMPRE use antes de dizer que não encontrou.
+Busca em título, conteúdo e tags. Exemplos: "o que Pastel fez ontem?", "caminhão W2 hoje".`,
     input_schema: {
       type: 'object',
       properties: {
@@ -78,16 +84,13 @@ Exemplos: "o que Pastel fez ontem?", "caminhão W2", "ocorrências de hoje".`,
     description: 'Atualiza campos de um memorando existente.',
     input_schema: {
       type: 'object',
-      properties: {
-        memorando_id: { type: 'string' },
-        campos: { type: 'object' },
-      },
+      properties: { memorando_id: { type: 'string' }, campos: { type: 'object' } },
       required: ['memorando_id', 'campos'],
     },
   },
   {
     name: 'excluir_memorando',
-    description: 'Exclui memorando permanentemente. Só use após confirmação explícita.',
+    description: 'Exclui memorando permanentemente. Só após confirmação explícita.',
     input_schema: {
       type: 'object',
       properties: { memorando_id: { type: 'string' } },
@@ -116,11 +119,31 @@ Exemplos: "o que Pastel fez ontem?", "caminhão W2", "ocorrências de hoje".`,
     },
   },
 
-  // ── CRM — Leads ───────────────────────────────────────────────────────────
+  // ── Memória persistente ───────────────────────────────────────────────────
+  {
+    name: 'salvar_memoria',
+    description: `Salva informações persistentes sobre o usuário no sistema.
+Use quando o usuário disser:
+- "me chame de X" / "meu nome é X" → salva nome_agente
+- "lembre que..." → salva em contexto_livre
+- "sempre responda de forma X" → salva em instrucoes_personalizadas
+- "quando eu disser X, é Y" → salva correção em correcoes_transcricao`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        nome_agente: { type: 'string', description: 'Nome que o usuário quer dar ao agente' },
+        contexto_livre: { type: 'string', description: 'Informação para lembrar sobre o usuário' },
+        instrucoes_personalizadas: { type: 'string', description: 'Como o agente deve se comportar' },
+        correcoes_transcricao: { type: 'object', description: 'Ex: {"Pascal": "Pastel", "W dois": "W2"}' },
+      },
+      required: [],
+    },
+  },
+
+  // ── CRM ───────────────────────────────────────────────────────────────────
   {
     name: 'listar_leads',
-    description: `Lista leads. Leads são contatos que passaram pela triagem comercial.
-Estágios: novo → contatado → qualificado → proposta_enviada → convertido → perdido.`,
+    description: 'Lista leads. Estágios: novo→contatado→qualificado→proposta_enviada→convertido→perdido.',
     input_schema: {
       type: 'object',
       properties: {
@@ -145,19 +168,13 @@ Estágios: novo → contatado → qualificado → proposta_enviada → convertid
     description: 'Atualiza dados ou status de um lead.',
     input_schema: {
       type: 'object',
-      properties: {
-        lead_id: { type: 'string' },
-        campos: { type: 'object' },
-      },
+      properties: { lead_id: { type: 'string' }, campos: { type: 'object' } },
       required: ['lead_id', 'campos'],
     },
   },
-
-  // ── CRM — Atendimentos ────────────────────────────────────────────────────
   {
     name: 'listar_atendimentos',
-    description: `Lista atendimentos/contatos recebidos (formulário, WhatsApp, site, telefone).
-Atendimentos são primeiros contatos — podem ou não virar leads após triagem.`,
+    description: 'Lista atendimentos/contatos recebidos. Primeiros contatos — podem ou não virar leads.',
     input_schema: {
       type: 'object',
       properties: {
@@ -177,11 +194,9 @@ Atendimentos são primeiros contatos — podem ou não virar leads após triagem
       required: ['texto'],
     },
   },
-
-  // ── CRM — Clientes / Instalações / Propostas ──────────────────────────────
   {
     name: 'listar_clientes',
-    description: 'Lista clientes do sistema.',
+    description: 'Lista clientes.',
     input_schema: {
       type: 'object',
       properties: {
@@ -203,7 +218,7 @@ Atendimentos são primeiros contatos — podem ou não virar leads após triagem
   },
   {
     name: 'listar_instalacoes',
-    description: 'Lista instalações, com filtro de status ou cliente.',
+    description: 'Lista instalações.',
     input_schema: {
       type: 'object',
       properties: {
@@ -216,7 +231,7 @@ Atendimentos são primeiros contatos — podem ou não virar leads após triagem
   },
   {
     name: 'listar_propostas',
-    description: 'Lista propostas enviadas.',
+    description: 'Lista propostas.',
     input_schema: {
       type: 'object',
       properties: {
@@ -229,8 +244,7 @@ Atendimentos são primeiros contatos — podem ou não virar leads após triagem
   },
   {
     name: 'resumo_estrategico',
-    description: `Gera resumo estratégico completo: clientes, leads, atendimentos, instalações, propostas, taxa de conversão.
-Use para: "como estamos?", "status geral", "relatório executivo", "quantos leads temos?".`,
+    description: 'Resumo estratégico completo: clientes, leads, atendimentos, propostas, instalações, taxa de conversão.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
 
@@ -284,16 +298,13 @@ Use para: "como estamos?", "status geral", "relatório executivo", "quantos lead
     description: 'Atualiza dados de um evento.',
     input_schema: {
       type: 'object',
-      properties: {
-        evento_id: { type: 'string' },
-        campos: { type: 'object' },
-      },
+      properties: { evento_id: { type: 'string' }, campos: { type: 'object' } },
       required: ['evento_id', 'campos'],
     },
   },
   {
     name: 'excluir_evento_agenda',
-    description: 'Exclui evento permanentemente. Só use após confirmação explícita.',
+    description: 'Exclui evento permanentemente. Só após confirmação explícita.',
     input_schema: {
       type: 'object',
       properties: { evento_id: { type: 'string' } },
@@ -301,18 +312,73 @@ Use para: "como estamos?", "status geral", "relatório executivo", "quantos lead
     },
   },
 
+  // ── Lembretes entre usuários ──────────────────────────────────────────────
+  {
+    name: 'criar_lembrete_usuario',
+    description: `Cria um lembrete para enviar a outro usuário numa data/hora específica.
+NÃO entra na agenda pessoal — é enviado direto pelo WhatsApp no horário marcado.
+Use quando: "lembra o Gustavo amanhã às 9h que...", "avisa a Ana na sexta às 14h sobre...", "me lembra hoje às 18h de...".
+Diferente de criar_evento_agenda — este é um recado, não um evento da agenda.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        destinatario: { type: 'string', description: 'Nome do destinatário (Gustavo, Robinson, Ana, Eduardo, eu)' },
+        mensagem: { type: 'string', description: 'Mensagem a enviar no lembrete' },
+        data_envio: { type: 'string', description: 'Data no formato YYYY-MM-DD' },
+        hora_envio: { type: 'string', description: 'Hora no formato HH:mm' },
+      },
+      required: ['destinatario', 'mensagem', 'data_envio', 'hora_envio'],
+    },
+  },
+  {
+    name: 'listar_lembretes',
+    description: 'Lista lembretes pendentes do usuário (que vai receber ou que criou).',
+    input_schema: {
+      type: 'object',
+      properties: {
+        tipo: { type: 'string', enum: ['todos', 'receber', 'enviei'], description: 'Filtrar por tipo' },
+      },
+      required: [],
+    },
+  },
+  {
+    name: 'cancelar_lembrete',
+    description: 'Cancela um lembrete pendente.',
+    input_schema: {
+      type: 'object',
+      properties: { lembrete_id: { type: 'string' } },
+      required: ['lembrete_id'],
+    },
+  },
+
+  // ── Comunicação entre usuários ────────────────────────────────────────────
+  {
+    name: 'enviar_mensagem_usuario',
+    description: `Envia mensagem de texto ou áudio para qualquer usuário, incluindo a si mesmo.
+Use quando: "envie boas-vindas ao Gustavo", "me manda um áudio", "avisa a Ana", "responde em áudio".
+Para áudio: use tipo="audio" apenas quando explicitamente pedido.
+Usuários: Gustavo, Robinson, Ana Carolina, Eduardo, eu (para si mesmo).`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        destinatario: { type: 'string', description: 'Nome do destinatário ou "eu"' },
+        mensagem: { type: 'string', description: 'Conteúdo da mensagem' },
+        tipo: { type: 'string', enum: ['texto', 'audio'], description: 'texto (padrão) ou audio' },
+      },
+      required: ['destinatario', 'mensagem'],
+    },
+  },
+
   // ── PDF ───────────────────────────────────────────────────────────────────
   {
     name: 'gerar_pdf',
-    description: `Gera relatório em PDF e envia pelo WhatsApp.
-Use quando: "gera um PDF", "quero exportar", "relatório em PDF".
-Pode incluir dados de memorandos, leads, atendimentos, etc.`,
+    description: 'Gera relatório em PDF e envia pelo WhatsApp.',
     input_schema: {
       type: 'object',
       properties: {
         titulo: { type: 'string' },
-        conteudo: { type: 'string', description: 'Texto introdutório' },
-        dados: { type: 'array', items: { type: 'object' }, description: 'Dados estruturados' },
+        conteudo: { type: 'string' },
+        dados: { type: 'array', items: { type: 'object' } },
       },
       required: ['titulo'],
     },
@@ -321,7 +387,7 @@ Pode incluir dados de memorandos, leads, atendimentos, etc.`,
   // ── Preferências ──────────────────────────────────────────────────────────
   {
     name: 'configurar_lembretes',
-    description: 'Configura notificações de agenda.',
+    description: 'Configura notificações de agenda (lembretes e resumo diário).',
     input_schema: {
       type: 'object',
       properties: {
@@ -335,45 +401,23 @@ Pode incluir dados de memorandos, leads, atendimentos, etc.`,
   },
   {
     name: 'ver_preferencias',
-    description: 'Mostra configurações atuais de notificação.',
+    description: 'Mostra configurações atuais.',
     input_schema: { type: 'object', properties: {}, required: [] },
-  },
-
-  // ── Comunicação entre usuários ───────────────────────────────────────────
-  {
-    name: 'enviar_mensagem_usuario',
-    description: `Envia uma mensagem de texto ou áudio para outro usuário autorizado do sistema.
-Use quando: "envie uma mensagem para Gustavo", "mande boas-vindas à Ana", "avise o Eduardo", "envie um áudio para Robinson".
-Usuários disponíveis: Gustavo, Robinson, Ana Carolina, Eduardo.
-IMPORTANTE: Se o usuário pedir "áudio", "manda um áudio", "responde em áudio" → use tipo="audio".
-Se não mencionar áudio → use tipo="texto" (padrão).`,
-    input_schema: {
-      type: 'object',
-      properties: {
-        destinatario: { type: 'string', description: 'Nome do destinatário (Gustavo, Robinson, Ana, Eduardo)' },
-        mensagem: { type: 'string', description: 'Conteúdo da mensagem a enviar' },
-        tipo: { type: 'string', enum: ['texto', 'audio'], description: 'texto (padrão) ou audio (só quando explicitamente pedido)' },
-      },
-      required: ['destinatario', 'mensagem'],
-    },
   },
 
   // ── Escalação ─────────────────────────────────────────────────────────────
   {
     name: 'notificar_robinson',
-    description: 'Use para solicitações que precisam da atenção de Robinson.',
+    description: 'Use para solicitações fora do escopo.',
     input_schema: {
       type: 'object',
-      properties: {
-        solicitante: { type: 'string' },
-        descricao: { type: 'string' },
-      },
+      properties: { solicitante: { type: 'string' }, descricao: { type: 'string' } },
       required: ['solicitante', 'descricao'],
     },
   },
 ];
 
-async function executarFerramenta(nome, input, numero) {
+async function executarFerramenta(nome, input, numero, usuario, memoriaRecord) {
   console.log(`[agent] Tool: ${nome}`);
 
   switch (nome) {
@@ -382,27 +426,37 @@ async function executarFerramenta(nome, input, numero) {
     case 'listar_memorandos': return memorandoTools.listarMemorandos(input);
     case 'atualizar_memorando': {
       const mid = input.memorando_id || '';
-      if (!mid || mid.length < 20 || !/^[a-f0-9]+$/i.test(mid)) {
-        return { erro: 'ID de memorando inválido. Busque o memorando primeiro para obter o ID real.' };
-      }
+      if (!mid || mid.length < 20 || !/^[a-f0-9]+$/i.test(mid))
+        return { erro: 'ID inválido. Busque o memorando primeiro.' };
       return memorandoTools.atualizarMemorando(input);
     }
     case 'excluir_memorando': {
       const mid = input.memorando_id || '';
-      if (!mid || mid.length < 20 || !/^[a-f0-9]+$/i.test(mid)) {
-        return { erro: 'ID de memorando inválido. Busque o memorando primeiro para obter o ID real.' };
-      }
+      if (!mid || mid.length < 20 || !/^[a-f0-9]+$/i.test(mid))
+        return { erro: 'ID inválido. Busque o memorando primeiro.' };
       return memorandoTools.excluirMemorando(input);
     }
     case 'adicionar_anexos_memorando': {
-      // Valida que o memorando_id é um ID real (hexadecimal), não um texto descritivo
       const mid = input.memorando_id || '';
-      if (!mid || mid.length < 20 || !/^[a-f0-9]+$/i.test(mid)) {
-        return { erro: 'ID de memorando inválido. Busque o memorando primeiro para obter o ID real.' };
-      }
+      if (!mid || mid.length < 20 || !/^[a-f0-9]+$/i.test(mid))
+        return { erro: 'ID inválido. Busque o memorando primeiro.' };
       return memorandoTools.adicionarAnexos(input);
     }
     case 'concluir_memorando': return memorandoTools.concluirMemorando(input);
+
+    case 'salvar_memoria': {
+      if (!memoriaRecord?.id) return { erro: 'Memória não disponível' };
+      const campos = {};
+      if (input.nome_agente) campos.nome_agente = input.nome_agente;
+      if (input.contexto_livre) campos.contexto_livre = input.contexto_livre;
+      if (input.instrucoes_personalizadas) campos.instrucoes_personalizadas = input.instrucoes_personalizadas;
+      if (input.correcoes_transcricao) {
+        const atual = memoriaRecord.correcoes_transcricao || {};
+        campos.correcoes_transcricao = { ...atual, ...input.correcoes_transcricao };
+      }
+      return memoriaTools.salvarMemoria(memoriaRecord.id, campos);
+    }
+
     case 'listar_leads': return crmTools.listarLeads(input);
     case 'buscar_lead': return crmTools.buscarLead(input);
     case 'atualizar_lead': return crmTools.atualizarLead(input);
@@ -415,80 +469,64 @@ async function executarFerramenta(nome, input, numero) {
       return crmTools.listarInstalacoes(input);
     case 'listar_propostas': return crmTools.listarPropostas(input);
     case 'resumo_estrategico': return crmTools.resumoEstrategico();
+
     case 'criar_evento_agenda': return agendaTools.criarEvento(input);
     case 'listar_eventos_agenda': return agendaTools.listarEventos(input);
     case 'eventos_hoje': return agendaTools.eventosHoje(input);
     case 'atualizar_evento_agenda': return agendaTools.atualizarEvento(input);
     case 'excluir_evento_agenda': return agendaTools.excluirEvento(input);
-    case 'gerar_pdf': return { __pdf_pendente: true, ...input };
-    case 'configurar_lembretes': return { sucesso: true, preferencias: setPrefs(numero, input) };
-    case 'ver_preferencias': return getPrefs(numero);
+
+    case 'criar_lembrete_usuario': {
+      const numDest = encontrarNumero(input.destinatario);
+      const numeroDestino = numDest === '__self__' ? numero : numDest;
+      const nomeDestino = numDest === '__self__' ? usuario.nome : (config.USUARIOS[numeroDestino]?.nome || input.destinatario);
+      if (!numeroDestino) return { erro: `Usuário ${input.destinatario} não encontrado.` };
+      return lembretesTools.criarLembrete({
+        remetente_numero: numero,
+        remetente_nome: usuario.nome,
+        destinatario_numero: numeroDestino,
+        destinatario_nome: nomeDestino,
+        mensagem: input.mensagem,
+        data_envio: input.data_envio,
+        hora_envio: input.hora_envio,
+      });
+    }
+    case 'listar_lembretes': return lembretesTools.listarLembretes({ numero, tipo: input.tipo || 'todos' });
+    case 'cancelar_lembrete': return lembretesTools.cancelarLembrete(input);
+
     case 'enviar_mensagem_usuario': {
-      const config = require('./config');
       const { enviarTexto, enviarAudio } = require('./evolution');
-      
-      // Encontra número do destinatário
-      const nomeDestino = (input.destinatario || '').toLowerCase();
-      let numeroDestino = null;
-      
-      // Suporta envio para si mesmo
-      const paraSimMesmo = ['eu', 'me', 'mim', 'para mim', 'mesmo', 'self'].includes(nomeDestino);
-      if (paraSimMesmo) {
-        numeroDestino = numero; // envia para quem está falando
-      } else {
-        for (const [num, usr] of Object.entries(config.USUARIOS)) {
-          if (usr.nome.toLowerCase().includes(nomeDestino) || 
-              (usr.diretor || '').toLowerCase() === nomeDestino) {
-            numeroDestino = num;
-            break;
-          }
-        }
-      }
-      
-      if (!numeroDestino) {
-        return { erro: `Usuário ${input.destinatario} não encontrado. Disponíveis: Gustavo, Robinson, Ana Carolina, Eduardo.` };
-      }
-      
+      const numDest = encontrarNumero(input.destinatario);
+      const numeroDestino = numDest === '__self__' ? numero : numDest;
+      if (!numeroDestino) return { erro: `Usuário ${input.destinatario} não encontrado.` };
+
       const tipo = input.tipo || 'texto';
-      
       if (tipo === 'audio') {
-        // Gera áudio via ElevenLabs
-        console.log('[agent] Gerando áudio via ElevenLabs para:', input.destinatario);
+        console.log(`[agent] Gerando áudio via ElevenLabs para: ${input.destinatario}`);
         const audioBuffer = await gerarAudio(input.mensagem);
-        console.log('[agent] audioBuffer:', audioBuffer ? `OK (${audioBuffer.length} bytes)` : 'NULL');
         if (audioBuffer) {
           await enviarAudio(numeroDestino, audioBuffer);
-          return { sucesso: true, tipo: 'audio', destinatario: input.destinatario, numero: numeroDestino };
+          return { sucesso: true, tipo: 'audio', destinatario: input.destinatario };
         } else {
-          // Fallback para texto se áudio falhar
           await enviarTexto(numeroDestino, input.mensagem);
-          return { sucesso: true, tipo: 'texto_fallback', aviso: 'ElevenLabs indisponível, enviado como texto', destinatario: input.destinatario };
+          return { sucesso: true, tipo: 'texto_fallback', aviso: 'ElevenLabs indisponível, enviado como texto' };
         }
       } else {
         await enviarTexto(numeroDestino, input.mensagem);
-        return { sucesso: true, tipo: 'texto', destinatario: input.destinatario, numero: numeroDestino };
+        return { sucesso: true, tipo: 'texto', destinatario: input.destinatario };
       }
     }
-    
+
+    case 'gerar_pdf': return { __pdf_pendente: true, ...input };
+    case 'configurar_lembretes': return { sucesso: true, preferencias: setPrefs(numero, input) };
+    case 'ver_preferencias': return getPrefs(numero);
     case 'notificar_robinson': return { __notificar_robinson: true, ...input };
     default: return { erro: `Ferramenta desconhecida: ${nome}` };
   }
 }
 
-const historicos = {};
-const ultimoMemorando = {};
-const MAX_HISTORICO = 20;
-
-function obterHistorico(numero) {
-  if (!historicos[numero]) historicos[numero] = [];
-  return historicos[numero];
-}
-
-function adicionarAoHistorico(numero, role, content) {
-  const hist = obterHistorico(numero);
-  hist.push({ role, content });
-  if (hist.length > MAX_HISTORICO) historicos[numero] = hist.slice(-MAX_HISTORICO);
-}
+// Cache de memória por número (atualizado a cada mensagem)
+const memoriaCache = {};
 
 async function processarMensagem({ numero, usuario, texto, midiaUrl, midiaInfo, descricaoImagem }) {
   const hoje = new Date().toLocaleDateString('pt-BR', {
@@ -499,62 +537,85 @@ async function processarMensagem({ numero, usuario, texto, midiaUrl, midiaInfo, 
   const temAgenda = !!usuario.diretor;
   const prefs = getPrefs(numero);
 
+  // Carrega memória persistente
+  let memoriaRecord = memoriaCache[numero];
+  if (!memoriaRecord) {
+    memoriaRecord = await memoriaTools.carregarMemoria(numero, usuario.user_id);
+    if (memoriaRecord) memoriaCache[numero] = memoriaRecord;
+  }
+
+  // Aplica correções de transcrição se houver
+  if (texto && memoriaRecord?.correcoes_transcricao) {
+    texto = memoriaTools.aplicarCorrecoes(texto, memoriaRecord.correcoes_transcricao);
+  }
+
+  // Nome personalizado do agente
+  const nomeAgente = memoriaRecord?.nome_agente || 'Assistente Cobertex';
+  const instrucoes = memoriaRecord?.instrucoes_personalizadas || '';
+  const contexto = memoriaRecord?.contexto_livre || '';
+
   let contextoExtra = '';
   if (midiaUrl) {
-    contextoExtra += `\n\n📎 MÍDIA RECEBIDA COM URL PÚBLICA: ${midiaUrl}`;
-    if (midiaInfo) contextoExtra += ` (${midiaInfo.tipo})`;
-    if (ultimoMemorando[numero]) {
-      contextoExtra += `\n⚠️ Memorando recente: ID=${ultimoMemorando[numero].id}, título="${ultimoMemorando[numero].titulo}". Pergunte se quer ANEXAR ao anterior ou CRIAR novo.`;
-    } else {
-      contextoExtra += `\nSe criar memorando: 1) inclua esta URL em anexos[], 2) E também mencione a URL no campo conteudo no final (ex: '📎 Imagem: URL').`;
+    contextoExtra += `\n\n📎 MÍDIA RECEBIDA: ${midiaUrl} (${midiaInfo?.tipo})`;
+    const ultimoMem = memoriaRecord?.ultimo_memorando_id;
+    if (ultimoMem) {
+      contextoExtra += `\n⚠️ Memorando recente: ID=${ultimoMem}, título="${memoriaRecord?.ultimo_memorando_titulo}". Pergunte se quer ANEXAR ao anterior ou CRIAR novo.`;
     }
   }
   if (descricaoImagem) contextoExtra += `\n🖼️ DESCRIÇÃO DA IMAGEM: ${descricaoImagem}`;
 
-  const systemPrompt = `Você é o assistente pessoal IA da Cobertex, empresa de coberturas e galpões em São Paulo.
+  const systemPrompt = `Você é ${nomeAgente}, assistente pessoal IA da Cobertex.
 Hoje é ${hoje}.
 
 ## Usuário
 - Nome: ${usuario.nome} | ID: ${usuario.user_id} | Perfil: ${usuario.role}
-${temAgenda ? `- Agenda pessoal: diretor="${usuario.diretor}"` : ''}
-- Notificações: ${prefs.lembretes ? `lembretes ${prefs.minutosAntes}min antes` : 'sem lembretes'} | ${prefs.resumoDiario ? `resumo às ${prefs.horaResumo}` : 'sem resumo diário'}
+${temAgenda ? `- Agenda: diretor="${usuario.diretor}"` : ''}
+- Notificações: ${prefs.lembretes ? `lembretes ${prefs.minutosAntes}min antes` : 'sem lembretes'} | ${prefs.resumoDiario ? `resumo às ${prefs.horaResumo}` : 'sem resumo'}
+${contexto ? `- Contexto: ${contexto}` : ''}
+${instrucoes ? `- Instruções personalizadas: ${instrucoes}` : ''}
 
-## Capacidades completas
-1. Memorandos operacionais — criar, buscar, editar, excluir, anexar mídia
-2. CRM completo — clientes, leads, atendimentos, propostas, instalações
+## Capacidades
+1. Memorandos operacionais
+2. CRM completo (leads, atendimentos, clientes, propostas, instalações)
 3. Agenda pessoal ${temAgenda ? `(diretor="${usuario.diretor}")` : '(apenas diretores)'}
-4. Relatórios em PDF — gerados e enviados direto pelo WhatsApp
-5. Análise estratégica — resumos, métricas, tendências do negócio
+4. Lembretes entre usuários (via WhatsApp, fora da agenda)
+5. Envio de mensagens e áudios para outros usuários
+6. Memória persistente (aprende preferências e correções)
+7. PDF pelo WhatsApp
+8. Análise estratégica
 
-## Funil comercial Cobertex
+## Funil Cobertex
 ATENDIMENTO → LEAD → PROPOSTA → CLIENTE
-- Atendimento: Primeiro contato de interesse. Ainda não qualificado. Pode ser de qualquer origem.
-- Lead: Passou pela triagem comercial. Tem potencial real. Avança por estágios.
-- Proposta: Enviada ao lead qualificado.
-- Cliente: Lead convertido após proposta aprovada.
-⚠️ Atendimentos ≠ Leads — são etapas diferentes do funil!
+- Atendimento: primeiro contato, não qualificado ainda
+- Lead: passou pela triagem, tem potencial
+- ⚠️ Atendimentos ≠ Leads!
 
 ## Regras
 - criador_id = "${usuario.user_id}" nos memorandos
 - diretor = "${usuario.diretor || 'N/A'}" na agenda
-- BUSCA: Para qualquer nome/apelido/veículo → use buscar_memorandos IMEDIATAMENTE sem perguntar
-- MÍDIA: Se midiaUrl existe → inclua em anexos[] E também no conteúdo do memorando no final (ex: '📎 Imagem: [URL]')
-- EXCLUIR: Confirme antes. Após confirmação → execute.
-- EDITAR: Pergunte se quer sobrescrever ou criar novo
-- PDF: Use gerar_pdf e avise que está gerando — será enviado em seguida
-- ÁUDIO: Quando pedido explicitamente ("me responde em áudio", "fala em áudio", "manda um áudio"), use enviar_mensagem_usuario com destinatario="eu" e tipo="audio". Nunca diga que não pode gerar áudio.
-- Para uploads grandes → indique ${config.SISTEMA_URL}
-- Respostas objetivas. Para diretores, pode ser mais analítico e estratégico.${contextoExtra}`;
+- BUSCA: use buscar_memorandos IMEDIATAMENTE para qualquer nome/termo
+- MÍDIA: inclua midiaUrl em anexos[] ao criar memorando
+- ÁUDIO: quando pedido explicitamente, use enviar_mensagem_usuario com tipo="audio"
+- MEMÓRIA: quando usuário pedir para lembrar algo, use salvar_memoria
+- LEMBRETE ENTRE USUÁRIOS: use criar_lembrete_usuario (não é agenda pessoal)
+- EXCLUIR: confirme antes
+- Sistema: ${config.SISTEMA_URL}${contextoExtra}`;
 
   let userContent = texto || '';
   if (midiaUrl) {
-    userContent = `[Mídia recebida. URL: ${midiaUrl}. Tipo: ${midiaInfo?.tipo}. Descrição: ${descricaoImagem || 'N/A'}]\n\n${userContent}`;
+    userContent = `[Mídia: ${midiaUrl}. Tipo: ${midiaInfo?.tipo}. Descrição: ${descricaoImagem || 'N/A'}]\n\n${userContent}`;
   } else if (descricaoImagem) {
     userContent = `[Imagem. Descrição: ${descricaoImagem}]\n\n${userContent}`;
   }
 
-  adicionarAoHistorico(numero, 'user', userContent);
-  const messages = obterHistorico(numero).map(m => ({ role: m.role, content: m.content }));
+  // Histórico simples em memória
+  if (!processarMensagem._historicos) processarMensagem._historicos = {};
+  if (!processarMensagem._historicos[numero]) processarMensagem._historicos[numero] = [];
+  const hist = processarMensagem._historicos[numero];
+  hist.push({ role: 'user', content: userContent });
+  if (hist.length > 20) processarMensagem._historicos[numero] = hist.slice(-20);
+
+  const messages = [...processarMensagem._historicos[numero]];
 
   let resposta = '';
   let notificarRobinson = null;
@@ -576,19 +637,29 @@ ATENDIMENTO → LEAD → PROPOSTA → CLIENTE
       const toolResults = [];
 
       for (const toolUse of toolUseBlocks) {
-        const resultado = await executarFerramenta(toolUse.name, toolUse.input, numero);
+        const resultado = await executarFerramenta(toolUse.name, toolUse.input, numero, usuario, memoriaRecord);
 
-        if (toolUse.name === 'criar_memorando' && resultado?.id) {
-          ultimoMemorando[numero] = { id: resultado.id, titulo: resultado.titulo };
+        // Atualiza cache de memória após salvar
+        if (toolUse.name === 'salvar_memoria' && resultado?.id) {
+          memoriaCache[numero] = resultado;
         }
+
+        // Salva último memorando na memória persistente
+        if (toolUse.name === 'criar_memorando' && resultado?.id && memoriaRecord?.id) {
+          memoriaTools.salvarMemoria(memoriaRecord.id, {
+            ultimo_memorando_id: resultado.id,
+            ultimo_memorando_titulo: resultado.titulo,
+          });
+          memoriaCache[numero] = { ...memoriaRecord, ultimo_memorando_id: resultado.id, ultimo_memorando_titulo: resultado.titulo };
+        }
+
         if (resultado?.__notificar_robinson) notificarRobinson = resultado;
         if (resultado?.__pdf_pendente) {
           pdfPendente = resultado;
-          // Retorna confirmação ao Claude
           toolResults.push({
             type: 'tool_result',
             tool_use_id: toolUse.id,
-            content: JSON.stringify({ sucesso: true, mensagem: 'PDF será gerado e enviado pelo WhatsApp agora.' }),
+            content: JSON.stringify({ sucesso: true, mensagem: 'PDF será gerado e enviado agora.' }),
           });
           continue;
         }
@@ -609,7 +680,7 @@ ATENDIMENTO → LEAD → PROPOSTA → CLIENTE
     }
   }
 
-  adicionarAoHistorico(numero, 'assistant', resposta);
+  hist.push({ role: 'assistant', content: resposta });
   return { resposta, notificarRobinson, pdfPendente };
 }
 
