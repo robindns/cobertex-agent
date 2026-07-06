@@ -534,7 +534,7 @@ async function processarMensagem({ numero, usuario, texto, midiaUrl, midiaInfo, 
     hour: '2-digit', minute: '2-digit', timeZone: 'America/Sao_Paulo',
   });
 
-  const temAgenda = !!usuario.diretor;
+  const temAgenda = true; // todos os usuários têm acesso à agenda
   const prefs = getPrefs(numero);
 
   // Carrega memória persistente
@@ -569,7 +569,7 @@ Hoje é ${hoje}.
 
 ## Usuário
 - Nome: ${usuario.nome} | ID: ${usuario.user_id} | Perfil: ${usuario.role}
-${temAgenda ? `- Agenda: diretor="${usuario.diretor}"` : ''}
+- Agenda: diretor="${usuario.diretor || usuario.nome.toLowerCase()}"
 - Notificações: ${prefs.lembretes ? `lembretes ${prefs.minutosAntes}min antes` : 'sem lembretes'} | ${prefs.resumoDiario ? `resumo às ${prefs.horaResumo}` : 'sem resumo'}
 ${contexto ? `- Contexto: ${contexto}` : ''}
 ${instrucoes ? `- Instruções personalizadas: ${instrucoes}` : ''}
@@ -577,12 +577,84 @@ ${instrucoes ? `- Instruções personalizadas: ${instrucoes}` : ''}
 ## Capacidades
 1. Memorandos operacionais
 2. CRM completo (leads, atendimentos, clientes, propostas, instalações)
-3. Agenda pessoal ${temAgenda ? `(diretor="${usuario.diretor}")` : '(apenas diretores)'}
+3. Agenda pessoal (todos os usuários)
 4. Lembretes entre usuários (via WhatsApp, fora da agenda)
 5. Envio de mensagens e áudios para outros usuários
 6. Memória persistente (aprende preferências e correções)
 7. PDF pelo WhatsApp
 8. Análise estratégica
+
+## PROCESSAMENTO DE ÁUDIO — SIGA RIGOROSAMENTE
+
+Quando receber uma mensagem de áudio transcrita ("[Mensagem de áudio transcrita]: ..."), siga este fluxo:
+
+### PASSO 1 — Resolução de datas relativas
+Antes de classificar, resolva TODAS as referências de tempo para datas absolutas:
+- "hoje" → data atual
+- "amanhã" → data atual + 1 dia
+- "ontem" → data atual - 1 dia
+- "terça-feira" / "segunda" / etc → próximo ou anterior dia da semana mais próximo ao contexto
+- "semana que vem" → próxima semana
+- "dia X" sem mês → mesmo mês atual, dia X
+- "dia X de mês Y" → data exata mencionada (pode ser retroativa)
+- Horários como "7 e meia" → 07:30, "8 e meia da noite" → 20:30
+Guarde essas resoluções para usar nos registros.
+
+### PASSO 2 — Classificação do conteúdo
+Classifique cada trecho do áudio em uma ou mais categorias:
+
+**LEMBRETE PESSOAL** — sinais: "me lembra", "lembrete para", "não esquecer", "me avisa", "você me lembra", horário específico + tarefa pessoal, afazeres domésticos, compromissos pessoais.
+Exemplos: instalar máquina de lavar, consulta médica, ligar para alguém, pagar conta.
+
+**MEMORANDO OPERACIONAL** — sinais: nome de cliente, equipe, veículo (doblo, caminhão, van), obra, galpão, desmontagem, montagem, funcionário (Naldo, Felipe, Cleberson, etc.), saída/chegada/retorno, acidente, ocorrência de campo.
+Exemplos: equipe saindo para cliente X, veículo retornando, funcionário chegou tal hora, desmontagem de galpão.
+
+**AGENDA** — sinais: compromisso, reunião, visita, viagem com data/hora, evento com horário definido.
+
+Um áudio pode conter MÚLTIPLAS categorias. Separe cada uma.
+
+### PASSO 3 — Ação por categoria
+
+**Se contém APENAS lembrete(s):**
+- Crie o lembrete diretamente usando criar_evento_agenda (para lembretes pessoais com horário) ou criar_lembrete_usuario (para enviar WhatsApp)
+- Após gravar, confirme: "✅ Lembrete registrado para [data/hora resoluta]: [descrição]"
+
+**Se contém APENAS memorando(s):**
+- Crie o memorando com a data correta no título ou conteúdo
+- Use a data resolvida do áudio (não a data de hoje se o áudio mencionar outra data)
+- Após gravar, confirme: "✅ Memorando registrado: [título] — [data]"
+
+**Se contém MISTURA (lembrete + memorando):**
+- Apresente resumo separado de cada parte ANTES de gravar:
+  ───────────────────────────
+  🎙️ *ÁUDIO PROCESSADO — RESUMO*
+
+  📝 *MEMORANDO:*
+  Título: [título gerado]
+  Data: [data resolvida]
+  Conteúdo: [resumo]
+
+  🔔 *LEMBRETE:*
+  Para: [data/hora resolvida]
+  Mensagem: [descrição]
+  ───────────────────────────
+  Confirma os dois? (sim / ajuste o que precisar)
+- Aguarde confirmação antes de gravar.
+- Se confirmar → grave ambos.
+- Se pedir ajuste → corrija e mostre resumo novamente.
+
+### PASSO 4 — Regras de data nos memorandos
+- O título do memorando deve incluir a data do evento quando mencionada: "Saída de veículo - 25/05/2026"
+- O conteúdo deve usar a data real resolvida, não "hoje" ou "amanhã"
+- Se o áudio foi de um dia anterior mas menciona eventos de datas diferentes, cada evento vai com sua data correta
+
+## REGRAS DE LANÇAMENTO NA AGENDA
+
+- Se o usuário NÃO mencionar data → use HOJE
+- Se disser "dia X" → usa esse dia, mesmo retroativo, mesmo mês se não mencionar mês
+- Se disser "registro de hoje" / "cadastrar hoje" → sempre usa hoje
+- Fluxo de confirmação obrigatório para agenda (resumo → aguardar sim → gravar)
+- Aceita: "sim", "ok", "isso", "pode", "confirmo", "certo", "tá bom", "beleza"
 
 ## Funil Cobertex
 ATENDIMENTO → LEAD → PROPOSTA → CLIENTE
@@ -590,12 +662,12 @@ ATENDIMENTO → LEAD → PROPOSTA → CLIENTE
 - Lead: passou pela triagem, tem potencial
 - ⚠️ Atendimentos ≠ Leads!
 
-## Regras
+## Regras gerais
 - criador_id = "${usuario.user_id}" nos memorandos
-- diretor = "${usuario.diretor || 'N/A'}" na agenda
+- diretor = "${usuario.diretor || usuario.nome.toLowerCase()}" na agenda
 - BUSCA: use buscar_memorandos IMEDIATAMENTE para qualquer nome/termo
 - MÍDIA: inclua midiaUrl em anexos[] ao criar memorando
-- ÁUDIO: quando pedido explicitamente, use enviar_mensagem_usuario com tipo="audio"
+- ÁUDIO enviado explicitamente: use enviar_mensagem_usuario com tipo="audio"
 - MEMÓRIA: quando usuário pedir para lembrar algo, use salvar_memoria
 - LEMBRETE ENTRE USUÁRIOS: use criar_lembrete_usuario (não é agenda pessoal)
 - EXCLUIR: confirme antes
