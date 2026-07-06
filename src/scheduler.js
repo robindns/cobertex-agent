@@ -4,7 +4,7 @@ const base44 = require('./base44');
 const { enviarTexto } = require('./evolution');
 const { buscarLembretesParaEnviar, marcarEnviado } = require('./tools/lembretes');
 
-// Preferências em memória (fallback enquanto não carrega do Base44)
+// Preferências em memória
 const preferencias = {
   '5511947436391': { resumoDiario: false, horaResumo: '08:00', lembretes: true, minutosAntes: 15 },
   '5511995692963': { resumoDiario: false, horaResumo: '08:00', lembretes: true, minutosAntes: 10 },
@@ -13,6 +13,13 @@ const preferencias = {
 };
 
 const notificacoesEnviadas = new Set();
+
+// Cache de eventos por diretor para reduzir chamadas ao Base44
+const cacheEventos = {};
+const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutos
+
+// Intervalo do scheduler: 3 minutos (era 60s — causava rate limit no Base44)
+const SCHEDULER_INTERVAL_MS = 3 * 60 * 1000;
 
 function getPrefs(numero) {
   return preferencias[numero] || { resumoDiario: false, horaResumo: '08:00', lembretes: true, minutosAntes: 10 };
@@ -33,15 +40,28 @@ async function buscarEventosHoje(diretor) {
   const agoraSP = new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
   const inicioHoje = new Date(agoraSP.getFullYear(), agoraSP.getMonth(), agoraSP.getDate(), 0, 0, 0);
   const fimHoje = new Date(agoraSP.getFullYear(), agoraSP.getMonth(), agoraSP.getDate(), 23, 59, 59);
+
+  // Verificar cache
+  const cacheKey = `${diretor}_${inicioHoje.toDateString()}`;
+  const cached = cacheEventos[cacheKey];
+  if (cached && (Date.now() - cached.ts) < CACHE_TTL_MS) {
+    return cached.dados;
+  }
+
   try {
     const todos = await base44.list('EventoAgenda', { diretor, concluido: false }, 100);
-    return todos.filter(e => {
+    const filtrados = todos.filter(e => {
       const data = new Date(e.data_inicio);
       return data >= inicioHoje && data <= fimHoje;
     }).sort((a, b) => new Date(a.data_inicio) - new Date(b.data_inicio));
+
+    // Salvar no cache
+    cacheEventos[cacheKey] = { ts: Date.now(), dados: filtrados };
+    return filtrados;
   } catch (err) {
     console.error('[scheduler] Erro ao buscar eventos:', err.message);
-    return [];
+    // Retorna cache antigo se houver, para não deixar o agente cair
+    return cached ? cached.dados : [];
   }
 }
 
@@ -110,16 +130,24 @@ async function verificarResumoDiario() {
   }
 }
 
+// Cache de lembretes para reduzir chamadas
+let ultimaVerificacaoLembretes = 0;
+const LEMBRETES_INTERVAL_MS = 5 * 60 * 1000; // Lembretes só verificam a cada 5 min
+
 async function verificarLembretesAgente() {
+  const agora = Date.now();
+  if (agora - ultimaVerificacaoLembretes < LEMBRETES_INTERVAL_MS) return;
+  ultimaVerificacaoLembretes = agora;
+
   try {
     const lembretesParaEnviar = await buscarLembretesParaEnviar();
-    
+
     for (const lembrete of lembretesParaEnviar) {
       const chave = `lembrete_${lembrete.id}`;
       if (notificacoesEnviadas.has(chave)) continue;
       notificacoesEnviadas.add(chave);
 
-      const mensagem = 
+      const mensagem =
         `🔔 *Lembrete enviado por ${lembrete.remetente_nome}*\n\n` +
         `${lembrete.mensagem}`;
 
@@ -129,12 +157,12 @@ async function verificarLembretesAgente() {
       console.log(`[scheduler] Lembrete enviado: ${lembrete.remetente_nome} → ${lembrete.destinatario_nome}`);
     }
   } catch (err) {
-    console.error('[scheduler] Erro ao verificar lembretes agente:', err.message);
+    console.error('[lembretes] Erro ao buscar:', err.message);
   }
 }
 
 function iniciarScheduler() {
-  console.log('[scheduler] ✅ Iniciado — verificando a cada 60s');
+  console.log(`[scheduler] ✅ Iniciado — verificando a cada ${SCHEDULER_INTERVAL_MS / 1000}s (com cache de ${CACHE_TTL_MS / 1000}s)`);
 
   setInterval(async () => {
     try {
@@ -144,7 +172,7 @@ function iniciarScheduler() {
     } catch (err) {
       console.error('[scheduler] Erro no loop:', err.message);
     }
-  }, 60 * 1000);
+  }, SCHEDULER_INTERVAL_MS);
 }
 
 module.exports = { iniciarScheduler, getPrefs, setPrefs, enviarResumoDiario };
