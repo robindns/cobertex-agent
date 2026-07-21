@@ -680,14 +680,25 @@ ATENDIMENTO → LEAD → PROPOSTA → CLIENTE
     userContent = `[Imagem. Descrição: ${descricaoImagem}]\n\n${userContent}`;
   }
 
-  // Histórico simples em memória
+  // Determina se é áudio — áudios NÃO entram no histórico para evitar duplicidade
+  const ehAudio = texto && texto.startsWith('[Mensagem de áudio transcrita]');
+
+  // Histórico em memória — só mensagens de texto (não áudios)
   if (!processarMensagem._historicos) processarMensagem._historicos = {};
   if (!processarMensagem._historicos[numero]) processarMensagem._historicos[numero] = [];
   const hist = processarMensagem._historicos[numero];
-  hist.push({ role: 'user', content: userContent });
-  if (hist.length > 20) processarMensagem._historicos[numero] = hist.slice(-20);
 
-  const messages = [...processarMensagem._historicos[numero]];
+  if (!ehAudio) {
+    hist.push({ role: 'user', content: userContent });
+    // Mantém apenas as últimas 6 trocas (12 mensagens) para contexto de conversa
+    if (hist.length > 12) processarMensagem._historicos[numero] = hist.slice(-12);
+  }
+
+  // Para áudios: processa sem histórico anterior para evitar reprocessamento
+  // Para texto: usa histórico de conversa para contexto
+  const messages = ehAudio
+    ? [{ role: 'user', content: userContent }]
+    : [...processarMensagem._historicos[numero]];
 
   let resposta = '';
   let notificarRobinson = null;
@@ -747,12 +758,21 @@ ATENDIMENTO → LEAD → PROPOSTA → CLIENTE
       mensagensAtuais.push({ role: 'user', content: toolResults });
 
     } else {
-      resposta = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n');
+      resposta = response.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim();
       continuar = false;
     }
   }
 
-  hist.push({ role: 'assistant', content: resposta });
+  // Salva resposta no histórico apenas para mensagens de texto
+  if (!ehAudio && resposta) {
+    hist.push({ role: 'assistant', content: resposta });
+  }
+
+  // Proteção contra resposta vazia
+  if (!resposta) {
+    resposta = '✅ Processado com sucesso.';
+  }
+
   return { resposta, notificarRobinson, pdfPendente };
 }
 
