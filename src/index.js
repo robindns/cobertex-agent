@@ -8,6 +8,7 @@ const { enviarTexto, enviarDocumento, marcarLida, digitando } = require('./evolu
 const { uploadMidia, tamanhoMB } = require('./tools/storage');
 const { gerarPDFBuffer } = require('./tools/relatorio');
 const { iniciarScheduler } = require('./scheduler');
+const { iniciarMonitor } = require('./monitor');
 
 const app = express();
 app.use(express.json({ limit: '50mb' }));
@@ -222,4 +223,5 @@ app.listen(config.PORT, () => {
   }
   console.log('');
   iniciarScheduler();
+  iniciarMonitor();
 });
