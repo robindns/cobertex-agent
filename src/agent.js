@@ -708,8 +708,8 @@ ATENDIMENTO → LEAD → PROPOSTA → CLIENTE
 
   while (continuar) {
     const response = await anthropic.messages.create({
-      model: 'claude-opus-4-5',
-      max_tokens: 3000,
+      model: 'claude-sonnet-4-6',
+      max_tokens: 2000,
       system: systemPrompt,
       tools: TOOLS,
       messages: mensagensAtuais,
